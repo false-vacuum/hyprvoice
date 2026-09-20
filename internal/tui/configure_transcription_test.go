@@ -67,18 +67,29 @@ func TestGetTranscriptionModelOptions_OpenAI_ShowsCapabilities(t *testing.T) {
 	}
 }
 
-func TestGetTranscriptionModelOptions_Deepgram_ShowsBothModes(t *testing.T) {
+func TestGetTranscriptionModelOptions_Deepgram_ShowsModes(t *testing.T) {
 	options := getTranscriptionModelOptions("deepgram")
 
-	// Deepgram has 2 models: nova-3, nova-2
-	if len(options) != 2 {
-		t.Errorf("expected 2 options for deepgram, got %d", len(options))
+	// Deepgram has 3 models: nova-3, nova-2 and flux-general-en, the last of
+	// which is streaming-only.
+	wantMode := map[string]string{
+		"nova-3":          "batch+streaming",
+		"nova-2":          "batch+streaming",
+		"flux-general-en": "streaming",
 	}
 
-	// all deepgram models support both modes
+	if len(options) != len(wantMode) {
+		t.Errorf("expected %d options for deepgram, got %d", len(wantMode), len(options))
+	}
+
 	for _, opt := range options {
-		if !strings.Contains(opt.Desc, "batch+streaming") {
-			t.Errorf("deepgram model %s should mention batch+streaming: %s", opt.ID, opt.Desc)
+		want, ok := wantMode[opt.ID]
+		if !ok {
+			t.Errorf("unexpected deepgram model %s", opt.ID)
+			continue
+		}
+		if !strings.HasSuffix(opt.Desc, "- "+want) {
+			t.Errorf("deepgram model %s should be labeled %q: %s", opt.ID, want, opt.Desc)
 		}
 	}
 }

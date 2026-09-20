@@ -328,6 +328,12 @@ func TestAllTranscriptionModels_HaveDocsURL(t *testing.T) {
 		"whisper-cpp": "https://github.com/ggml-org/whisper.cpp#models",
 	}
 
+	// Models documented on their own page, because the provider-wide page does
+	// not describe them.
+	modelDocsURLs := map[string]string{
+		"flux-general-en": "https://developers.deepgram.com/docs/flux/",
+	}
+
 	for _, pName := range providers {
 		p := GetProvider(pName)
 		if p == nil {
@@ -335,10 +341,13 @@ func TestAllTranscriptionModels_HaveDocsURL(t *testing.T) {
 			continue
 		}
 
-		expectedURL := expectedDocsURLs[pName]
 		for _, m := range p.Models() {
 			if m.Type != Transcription {
 				continue
+			}
+			expectedURL := expectedDocsURLs[pName]
+			if override, ok := modelDocsURLs[m.ID]; ok {
+				expectedURL = override
 			}
 			if m.DocsURL == "" {
 				t.Errorf("%s/%s: DocsURL is empty", pName, m.ID)

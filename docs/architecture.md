@@ -68,6 +68,8 @@ The two are kept apart so a consumer can render confirmed and unconfirmed text d
 
 Sends are non-blocking at both hops and drop when the buffer is full: each snapshot carries the whole transcript, so a slow consumer is corrected by the next one and transcription is never held up. `SimpleTranscriber` does not implement `PartialTranscriber`, so batch models produce no partials and consumers fall back to status alone.
 
+Adapters that speak a provider's realtime protocol live one per file in `internal/transcriber/`, each owning its own connection handling. `AdapterDeepgram` covers the Deepgram v1 models; `AdapterDeepgramFlux` covers Flux, whose `/v2/listen` turn events are a different protocol rather than a variant of v1 (see `docs/providers.md`).
+
 ## LLM post-processing
 `internal/llm/llm.go` defines an `Adapter` interface with `Process(text, config)`.
 Adapters (OpenAI, Groq) use a shared prompt builder in `internal/llm/prompt.go`.

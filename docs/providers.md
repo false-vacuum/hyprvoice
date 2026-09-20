@@ -62,13 +62,36 @@ Known for voice synthesis, also offers excellent transcription via Scribe.
 Streaming-first provider with Nova models. Excellent for real-time applications.
 
 **Models:**
-- `flux-general-en` - Streaming with turn detection (English)
+- `flux-general-en` - Turn-based streaming, English only, streaming mode only
 - `nova-3` - Best accuracy, 42 languages
 - `nova-2` - Fast, 33 languages, filler word detection
 
-**Notes:** Flux is English-only.
+**Language Support:** Nova-3 supports 42 languages, Nova-2 supports 33 languages. Not all 57 languages from the master list are available. Flux is English-only and takes no language parameter.
 
-**Language Support:** Nova-3 supports 42 languages, Nova-2 supports 33 languages. Not all 57 languages from the master list are available.
+#### Flux
+
+Flux is a separate API from the Nova models, not a faster variant of them. It runs on `wss://api.deepgram.com/v2/listen` and reports turn events rather than a continuous stream of interim and final results:
+
+- The transcript in each event is cumulative for the current turn, not incremental.
+- `StartOfTurn`, `Update`, `EagerEndOfTurn` and `TurnResumed` carry a draft of the turn so far. Hyprvoice surfaces these as interim results, which the overlay renders dimmed.
+- `EndOfTurn` is the only final result.
+
+Because a dictation ends when you release the key, usually mid-turn, hyprvoice sends `ForceEndTurn` before `CloseStream` so the turn is closed on the audio already sent. If no `EndOfTurn` comes back within a few seconds, the turn's draft is kept as final rather than dropping your last words.
+
+Flux has no batch API, so `streaming = true` is required:
+
+```toml
+[transcription]
+provider = "deepgram"
+model = "flux-general-en"
+streaming = true
+```
+
+None of the v1 options (`interim_results`, `smart_format`, `punctuate`, `endpointing`) apply: turn detection and formatting are part of the model.
+
+#### Keywords
+
+Deepgram takes vocabulary hints under two different parameter names. Hyprvoice picks the right one from the model: `keyterm` for Nova-3 and Flux, `keywords` for older models. Both are sent once per term, so a multi-word phrase stays a single term.
 
 **Best for:** Real-time transcription, live captions, meeting transcription
 

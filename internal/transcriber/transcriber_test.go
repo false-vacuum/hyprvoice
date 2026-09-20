@@ -1256,3 +1256,53 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 	t.Fatal("condition never became true")
 }
+
+func TestNewTranscriber_FluxUsesFluxAdapter(t *testing.T) {
+	// Arrange
+	config := Config{
+		Provider:  "deepgram",
+		APIKey:    "test-key",
+		Language:  "en",
+		Model:     "flux-general-en",
+		Streaming: true,
+	}
+
+	// Act
+	transcriber, err := NewTranscriber(config)
+	if err != nil {
+		t.Fatalf("NewTranscriber() error = %v", err)
+	}
+
+	// Assert
+	streaming, ok := transcriber.(*StreamingTranscriber)
+	if !ok {
+		t.Fatalf("NewTranscriber() = %T, want *StreamingTranscriber", transcriber)
+	}
+	if _, ok := streaming.adapter.(*DeepgramFluxAdapter); !ok {
+		t.Errorf("adapter = %T, want *DeepgramFluxAdapter", streaming.adapter)
+	}
+}
+
+// Flux has no batch API, so asking for one must fail rather than silently
+// transcribing through a different model.
+func TestNewTranscriber_FluxRejectsBatchMode(t *testing.T) {
+	// Arrange
+	config := Config{
+		Provider:  "deepgram",
+		APIKey:    "test-key",
+		Language:  "en",
+		Model:     "flux-general-en",
+		Streaming: false,
+	}
+
+	// Act
+	_, err := NewTranscriber(config)
+
+	// Assert
+	if err == nil {
+		t.Fatal("NewTranscriber() error = nil, want an error for batch mode")
+	}
+	if !strings.Contains(err.Error(), "streaming") {
+		t.Errorf("error = %v, want it to mention streaming mode", err)
+	}
+}

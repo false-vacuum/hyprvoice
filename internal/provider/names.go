@@ -35,6 +35,7 @@ const (
 	AdapterElevenLabs       = "elevenlabs"
 	AdapterElevenLabsStream = "elevenlabs-streaming"
 	AdapterDeepgram         = "deepgram"
+	AdapterDeepgramFlux     = "deepgram-flux"
 	AdapterWhisperCpp       = "whisper-cpp"
 	AdapterOpenAIRealtime   = "openai-realtime"
 )

@@ -47,6 +47,23 @@ func (p *DeepgramProvider) Models() []Model {
 			DocsURL:            docsURL,
 		},
 		{
+			ID:                "flux-general-en",
+			Name:              "Flux (English)",
+			Description:       "Turn-based streaming; live drafts and lowest latency (English only)",
+			Type:              Transcription,
+			SupportsBatch:     false,
+			SupportsStreaming: true,
+			Local:             false,
+			AdapterType:       AdapterDeepgramFlux,
+			// English-only. Both codes are listed so a Deepgram user already
+			// set to en-US can switch to Flux without a config error; the API
+			// takes no language parameter either way.
+			SupportedLanguages: []string{"en", "en-US"},
+			// Flux is a separate API from the v1 models, on its own path.
+			Endpoint: &EndpointConfig{BaseURL: "wss://api.deepgram.com", Path: "/v2/listen"},
+			DocsURL:  "https://developers.deepgram.com/docs/flux/",
+		},
+		{
 			ID:                 "nova-2",
 			Name:               "Nova-2",
 			Description:        "Cheaper legacy model; still solid accuracy",

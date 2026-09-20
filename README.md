@@ -52,7 +52,7 @@ All supported speech-to-text providers and models:
 
 ### Deepgram (cloud)
 
-- `flux-general-en`
+- `flux-general-en` (streaming only, English)
 - `nova-3`
 - `nova-2`
 

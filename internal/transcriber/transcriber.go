@@ -109,6 +109,8 @@ func NewTranscriber(config Config) (Transcriber, error) {
 			streamingAdapter = NewElevenLabsStreamingAdapter(endpoint, config.APIKey, model.ID, config.Language, config.Keywords)
 		case provider.AdapterDeepgram:
 			streamingAdapter = NewDeepgramAdapter(endpoint, config.APIKey, model.ID, config.Language, config.Keywords)
+		case provider.AdapterDeepgramFlux:
+			streamingAdapter = NewDeepgramFluxAdapter(endpoint, config.APIKey, model.ID, config.Keywords)
 		case provider.AdapterOpenAIRealtime:
 			streamingAdapter = NewOpenAIRealtimeAdapter(endpoint, config.APIKey, model.ID, config.Language, config.Keywords)
 		default:

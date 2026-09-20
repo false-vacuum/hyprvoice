@@ -257,7 +257,7 @@ model = "gpt-4o-realtime-preview"
 | Provider | Model | Latency | Languages |
 |----------|-------|---------|-----------|
 | ElevenLabs | `scribe_v2_realtime` | <150ms | 57+ |
-| Deepgram | `flux-general-en` | Very Low | en |
+| Deepgram | `flux-general-en` | Very Low | en (streaming only) |
 | Deepgram | `nova-3` | Low | 42 |
 | Deepgram | `nova-2` | Very Low | 33 |
 | OpenAI | `gpt-4o-realtime-preview` | Low | 57 |
