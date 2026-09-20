@@ -33,9 +33,10 @@ var MessageDefs = []MessageDef{
 	{MsgInjectionAborted, "injection_aborted", "", "Injection Aborted", true},
 }
 
-// Message is a resolved message ready for display
+// Message is a resolved message ready for display. The json tags carry it to
+// the overlay over the daemon's status stream.
 type Message struct {
-	Title   string
-	Body    string
-	IsError bool
+	Title   string `json:"title,omitempty"`
+	Body    string `json:"body"`
+	IsError bool   `json:"is_error,omitempty"`
 }

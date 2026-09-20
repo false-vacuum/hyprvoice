@@ -78,7 +78,7 @@ type InjectionConfig struct {
 
 type NotificationsConfig struct {
 	Enabled  bool           `toml:"enabled"`
-	Type     string         `toml:"type"` // "desktop", "log", "none"
+	Type     string         `toml:"type"` // "desktop", "overlay", "log", "none"
 	Messages MessagesConfig `toml:"messages"`
 }
 

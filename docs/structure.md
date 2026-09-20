@@ -5,6 +5,7 @@ This doc explains how the CLI, daemon, and pipeline fit together and where to st
 ## Top-level layout
 - cmd/hyprvoice: CLI entrypoint and commands
 - internal/: core packages
+- overlay/: on-screen indicator client (Python + GTK4 layer shell)
 - docs/: user and developer docs (config, providers, architecture, structure, testing)
 - packaging/: AUR and systemd packaging
 - .github/workflows/: CI and release workflows
@@ -26,7 +27,7 @@ State machine: idle -> recording -> transcribing -> processing -> injecting -> i
 - internal/transcriber: batch and streaming provider adapters
 - internal/llm: post-processing adapters and prompts
 - internal/injection: wtype/ydotool/clipboard injection
-- internal/notify: desktop notifications
+- internal/notify: desktop, overlay and log notifiers
 - internal/provider: provider registry and model metadata
 - internal/models/whisper: local whisper model registry and downloads
 - internal/language: language metadata and compatibility rules
@@ -44,7 +45,8 @@ State machine: idle -> recording -> transcribing -> processing -> injecting -> i
 
 ## IPC protocol (daemon control)
 - Socket: ~/.cache/hyprvoice/control.sock
-- Commands: t=toggle, c=cancel, s=status, v=version, q=quit
+- Commands: t=toggle, c=cancel, s=status, w=watch, v=version, q=quit
+- `w` streams JSON events until the client disconnects; the rest are request/response
 
 ## Data and config locations
 - Config: ~/.config/hyprvoice/config.toml

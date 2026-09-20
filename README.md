@@ -56,6 +56,16 @@ All supported speech-to-text providers and models:
 - `nova-3`
 - `nova-2`
 
+## On-screen overlay
+
+Instead of desktop notifications, hyprvoice can show a small indicator near the center of the screen with the transcript as it is recognised, unconfirmed words dimmed:
+
+```bash
+install -Dm755 overlay/hyprvoice-overlay ~/.local/bin/hyprvoice-overlay
+```
+
+Then set `type = "overlay"` under `[notifications]`. Needs `gtk4`, `gtk4-layer-shell` and `python-gobject`. See [docs/config.md](docs/config.md#overlay).
+
 ## Installation (AUR)
 
 ```bash

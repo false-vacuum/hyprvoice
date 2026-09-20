@@ -1,0 +1,659 @@
+#!/usr/bin/env python3
+"""On-screen indicator for the hyprvoice daemon.
+
+Subscribes to the daemon's status stream over its control socket and draws a
+layer-shell surface showing what the daemon is doing, plus the transcript as it
+is recognised: confirmed text at full opacity, the unconfirmed tail dimmed.
+
+The daemon does not need this process. It is a plain client, so it can be
+started, stopped or crash without affecting dictation.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ctypes.util
+import json
+import math
+import os
+import socket
+import sys
+import threading
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+
+# gtk4-layer-shell works by intercepting the Wayland registry, so it has to be
+# loaded before libwayland-client. A C program gets that from link order; a
+# language binding dlopens it too late and the compositor then looks like it
+# has no layer shell at all. Re-exec once with the preload in place.
+_PRELOAD_GUARD = "HYPRVOICE_OVERLAY_PRELOADED"
+
+
+def _reexec_with_layer_shell_preloaded() -> None:
+    if os.environ.get(_PRELOAD_GUARD):
+        return
+
+    library = ctypes.util.find_library("gtk4-layer-shell")
+    if not library:
+        return  # let the missing-support message explain it later
+
+    env = dict(os.environ)
+    env[_PRELOAD_GUARD] = "1"
+    preload = env.get("LD_PRELOAD", "")
+    env["LD_PRELOAD"] = f"{library}:{preload}" if preload else library
+
+    os.execve(sys.executable, [sys.executable, os.path.abspath(__file__), *sys.argv[1:]], env)
+
+
+_reexec_with_layer_shell_preloaded()
+
+import gi  # noqa: E402
+
+gi.require_version("Gdk", "4.0")
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gtk4LayerShell", "1.0")
+gi.require_version("Pango", "1.0")
+
+from gi.repository import (  # noqa: E402
+    Gdk,
+    GLib,
+    Gtk,
+    Gtk4LayerShell as LayerShell,
+    Pango,
+)
+
+try:
+    import cairo
+except ImportError:  # pragma: no cover - only affects click-through
+    cairo = None
+
+# Single-byte command that opens the daemon's status stream.
+STREAM_COMMAND = b"w\n"
+
+# How long to wait before dialing the daemon again after the stream drops.
+RECONNECT_SECONDS = 2
+
+# How long an error stays on screen once the pipeline is idle again.
+ERROR_LINGER_MS = 4000
+
+# Levels arrive far faster than they need to be drawn; this many are kept for
+# the meter, oldest first.
+METER_BARS = 28
+
+# Where the meter puts its zero, in dBFS. Speech RMS sits low in 0..1, so a
+# linear bar spends its whole life on the floor and the meter reads as dead.
+# Measuring from a noise floor instead spends the height on the range a voice
+# actually occupies.
+METER_FLOOR_DB = -50.0
+
+# How many 32 ms windows are averaged into one reading. Levels arrive about
+# thirty times a second, which is more often than the dots need to move.
+WINDOWS_PER_BAR = 4
+
+# The dots, in pixels: diameter when silent, diameter at full scale, and the
+# space between them.
+DOT_COUNT = 5
+DOT_MIN_PX = 4.0
+DOT_MAX_PX = 14.0
+DOT_GAP_PX = 5.0
+
+# How far each dot follows the voice. The middle ones move most, which reads
+# as a single shape breathing rather than five separate meters.
+DOT_WEIGHTS = (0.5, 0.78, 1.0, 0.78, 0.5)
+
+# Share of the distance to a new level covered per update. Lower is smoother
+# and laggier; at 1.0 the dots snap and the whole thing twitches.
+DOT_EASE = 0.35
+
+STATUS_LABELS = {
+    "recording": "Listening",
+    "transcribing": "Listening",
+    "processing": "Polishing",
+    "injecting": "Typing",
+}
+
+# The transcript column, in characters. The label is pinned to this width in
+# both directions so words do not reflow sideways as they land.
+TRANSCRIPT_COLUMN_CHARS = 44
+
+# How far the transcript grows before it stops and scrolls instead.
+TRANSCRIPT_LINES = 4
+
+# Width of the status word, in characters, wide enough for the longest of them
+# ("Transcribing"). Reserved so the pill is one size whatever it says.
+STATUS_CHARS = 12
+
+# Dictation without punctuation never stops growing, so only the newest of it
+# is shown. Roughly the character budget of the lines above.
+TRANSCRIPT_BUDGET = TRANSCRIPT_COLUMN_CHARS * TRANSCRIPT_LINES
+
+ELLIPSIS = "\u2026"
+
+STYLE = b"""
+/* The surface is anchored to both side edges so the contents can be centred
+   on the output. Without this the window's own background paints across that
+   whole span as a bar. */
+window.overlay-background {
+    background-color: transparent;
+}
+/* One surface for both, so the state and the words read as one thing. The
+   card grows upward from a fixed bottom edge, which keeps the indicator row
+   in the same place no matter how much text is above it. */
+.overlay-card {
+    background-color: rgba(18, 18, 22, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 18px;
+    padding: 12px 16px;
+    /* Held at the width of the text column so the card does not widen when
+       the first word lands. */
+    min-width: 396px;
+}
+.overlay-card.error {
+    border-color: rgba(240, 110, 110, 0.55);
+}
+.overlay-status {
+    color: rgba(244, 244, 245, 0.70);
+    font-size: 12px;
+    font-weight: 600;
+}
+.overlay-dot {
+    font-size: 9px;
+}
+.overlay-dot.live {
+    color: #7fd694;
+}
+.overlay-dot.working {
+    color: #e5b567;
+}
+.overlay-dot.injecting {
+    color: #7aa7e5;
+}
+.overlay-dot.failed {
+    color: #ff9c9c;
+}
+.overlay-transcript {
+    color: #f4f4f5;
+    font-size: 15px;
+}
+.overlay-error {
+    color: #ff9c9c;
+    font-size: 13px;
+}
+"""
+
+
+def socket_path() -> Path:
+    """The daemon's control socket, following the same rules as the daemon."""
+    cache = os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")
+    return Path(cache) / "hyprvoice" / "control.sock"
+
+
+@dataclass
+class State:
+    """What the overlay knows about the daemon right now."""
+
+    status: str = "idle"
+    listening: bool = False
+    final: str = ""
+    draft: str = ""
+    error: str = ""
+    levels: list[float] = field(default_factory=list)
+    at: datetime | None = None
+    # Windows that have arrived but do not yet make a whole bar.
+    pending: list[float] = field(default_factory=list)
+
+    def apply(self, event: dict) -> None:
+        """Fold one status event into the current state.
+
+        Notices are published from a different goroutine than pipeline events,
+        so an event can arrive after one that is newer than it. Its message is
+        still worth showing, but letting its stale status win would leave the
+        overlay on screen after the pipeline has gone idle.
+        """
+        stale = self._is_stale(event)
+
+        status = event.get("status")
+        if status and not stale:
+            if status == "idle" and self.status != "idle":
+                self.final = ""
+                self.draft = ""
+                self.levels = []
+                self.pending = []
+            self.status = status
+
+        if not stale:
+            self.listening = bool(event.get("listening"))
+
+        transcript = event.get("transcript")
+        if transcript is not None:
+            self.final = transcript.get("final", "")
+            self.draft = transcript.get("draft", "")
+
+        levels = event.get("levels")
+        if levels:
+            self.levels = (self.levels + self._fold(levels))[-METER_BARS:]
+
+        notice = event.get("notice")
+        if notice is not None:
+            self.error = notice.get("body", "") if notice.get("is_error") else ""
+
+    def _fold(self, levels: list[float]) -> list[float]:
+        """Average incoming windows into the slower bars the meter draws."""
+        self.pending.extend(levels)
+
+        bars = []
+        while len(self.pending) >= WINDOWS_PER_BAR:
+            window = self.pending[:WINDOWS_PER_BAR]
+            self.pending = self.pending[WINDOWS_PER_BAR:]
+            bars.append(sum(window) / len(window))
+        return bars
+
+    def _is_stale(self, event: dict) -> bool:
+        """Whether this event describes a moment already superseded."""
+        raw = event.get("at")
+        if not raw:
+            return False
+
+        try:
+            at = datetime.fromisoformat(raw)
+        except ValueError:
+            return False
+
+        if self.at is not None and at < self.at:
+            return True
+
+        self.at = at
+        return False
+
+    @property
+    def visible(self) -> bool:
+        if self.error:
+            return True
+        if self.status == "idle":
+            return False
+        # A tap of the hotkey with nothing said still runs through Polishing
+        # and Typing, with an empty transcript the whole way. There is nothing
+        # to report, so the card stays away rather than flashing a state at an
+        # empty box. While the mic is open it belongs on screen regardless:
+        # that is the cue that it is listening.
+        return self.listening or bool(self.final or self.draft)
+
+    @property
+    def label(self) -> str:
+        if self.status == "transcribing" and not self.listening:
+            return "Transcribing"
+        return STATUS_LABELS.get(self.status, "Hyprvoice")
+
+    @property
+    def tone(self) -> str:
+        """Which colour the dot takes, as a CSS class on it."""
+        if self.error:
+            return "failed"
+        if self.status == "injecting":
+            return "injecting"
+        if self.listening:
+            return "live"
+        return "working"
+
+
+class VoiceDots(Gtk.DrawingArea):
+    """A row of dots that swell with the voice.
+
+    The dots hold their places and change size, rather than scrolling a
+    history of the audio past. There is nothing to read here: it says the mic
+    is open and hearing you, and that is all it has to say.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.level = 0.0
+        self.set_content_width(int(dots_width()))
+        self.set_content_height(int(DOT_MAX_PX))
+        self.set_draw_func(self._draw)
+
+    def update(self, levels: list[float]) -> None:
+        target = bar_fraction(levels[-1]) if levels else 0.0
+        # Eased towards the new level rather than set to it, so the dots
+        # breathe instead of flicking between sizes.
+        self.level += (target - self.level) * DOT_EASE
+        self.queue_draw()
+
+    def _draw(self, _area, ctx, width: int, height: int) -> None:
+        ctx.set_source_rgba(0.96, 0.96, 0.98, 0.9)
+        span = DOT_MAX_PX + DOT_GAP_PX
+        # Right-aligned, matching the trailing edge the dots sit on.
+        left = width - dots_width()
+        for index, weight in enumerate(DOT_WEIGHTS):
+            radius = dot_diameter(self.level, weight) / 2
+            centre_x = left + DOT_MAX_PX / 2 + index * span
+            ctx.new_sub_path()
+            ctx.arc(centre_x, height / 2, radius, 0, 2 * math.pi)
+        ctx.fill()
+
+
+def dots_width() -> float:
+    """The width the row of dots occupies at full scale."""
+    return DOT_COUNT * DOT_MAX_PX + (DOT_COUNT - 1) * DOT_GAP_PX
+
+
+def dot_diameter(level: float, weight: float) -> float:
+    """How wide one dot is at this level, in pixels."""
+    return DOT_MIN_PX + weight * level * (DOT_MAX_PX - DOT_MIN_PX)
+
+
+def bar_fraction(level: float) -> float:
+    """How much of the meter's height one level fills, 0..1."""
+    if level <= 0.0:
+        return 0.0
+    decibels = 20.0 * math.log10(level)
+    return max(0.0, min(1.0, (decibels - METER_FLOOR_DB) / -METER_FLOOR_DB))
+
+
+class Overlay:
+    """The layer-shell window and its contents."""
+
+    def __init__(self, app: Gtk.Application, anchor: str, margin: int) -> None:
+        self.state = State()
+        self.error_timeout: int | None = None
+
+        self.window = Gtk.ApplicationWindow(application=app)
+        self.window.set_decorated(False)
+        self.window.add_css_class("overlay-background")
+
+        LayerShell.init_for_window(self.window)
+        LayerShell.set_namespace(self.window, "hyprvoice")
+        LayerShell.set_layer(self.window, LayerShell.Layer.OVERLAY)
+        # Never take focus: the point of the overlay is to watch dictation into
+        # whatever window the user is actually typing in.
+        LayerShell.set_keyboard_mode(self.window, LayerShell.KeyboardMode.NONE)
+        # Anchored horizontally on both edges so the surface spans the output
+        # and its contents can be centred within it. No monitor is set, which
+        # leaves the compositor to place it on the focused output.
+        LayerShell.set_anchor(self.window, LayerShell.Edge.LEFT, True)
+        LayerShell.set_anchor(self.window, LayerShell.Edge.RIGHT, True)
+        if anchor in ("top", "bottom"):
+            edge = LayerShell.Edge.TOP if anchor == "top" else LayerShell.Edge.BOTTOM
+            LayerShell.set_anchor(self.window, edge, True)
+            LayerShell.set_margin(self.window, edge, margin)
+
+        self._build_contents()
+
+        self.window.connect("realize", self._on_realize)
+        self.window.connect("close-request", lambda *_: True)
+
+    def _build_contents(self) -> None:
+        outer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        outer.set_halign(Gtk.Align.CENTER)
+
+        # Transcript first, indicator last: the surface is anchored to the
+        # bottom edge, so the card grows upward and the indicator row stays put.
+        self.root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.root.add_css_class("overlay-card")
+        self.root.set_valign(Gtk.Align.END)
+
+        self.transcript_label = Gtk.Label()
+        self.transcript_label.add_css_class("overlay-transcript")
+        self.transcript_label.set_use_markup(True)
+        self.transcript_label.set_wrap(True)
+        # Pinned in both directions: a max alone still lets a short transcript
+        # request a narrower block, which moves both of its edges.
+        self.transcript_label.set_width_chars(TRANSCRIPT_COLUMN_CHARS)
+        self.transcript_label.set_max_width_chars(TRANSCRIPT_COLUMN_CHARS)
+        # A character budget cannot predict where Pango breaks a line, so the
+        # line count is clamped here as well.
+        self.transcript_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.transcript_label.set_lines(TRANSCRIPT_LINES)
+        self.transcript_label.set_xalign(0.0)
+        self.root.append(self.transcript_label)
+
+        self.error_label = Gtk.Label()
+        self.error_label.add_css_class("overlay-error")
+        self.error_label.set_wrap(True)
+        self.error_label.set_max_width_chars(TRANSCRIPT_COLUMN_CHARS)
+        self.error_label.set_xalign(0.0)
+        self.root.append(self.error_label)
+
+        self.indicator = self._build_indicator()
+        self.root.append(self.indicator)
+
+        outer.append(self.root)
+        self.window.set_child(outer)
+
+    def _build_indicator(self) -> Gtk.Box:
+        """The fixed row: a dot, the state, and the voice dots."""
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        row.add_css_class("overlay-indicator")
+
+        self.dot = Gtk.Label(label="\u25cf")
+        self.dot.add_css_class("overlay-dot")
+        self.dot.set_valign(Gtk.Align.CENTER)
+        row.append(self.dot)
+
+        # Reserved width, so a longer word cannot stretch the pill.
+        self.status_label = Gtk.Label()
+        self.status_label.add_css_class("overlay-status")
+        self.status_label.set_width_chars(STATUS_CHARS)
+        self.status_label.set_max_width_chars(STATUS_CHARS)
+        self.status_label.set_xalign(0.0)
+        row.append(self.status_label)
+
+        # Pushed to the trailing edge so the status word cannot shove it.
+        self.dots = VoiceDots()
+        self.dots.set_valign(Gtk.Align.CENTER)
+        self.dots.set_hexpand(True)
+        self.dots.set_halign(Gtk.Align.END)
+        row.append(self.dots)
+
+        return row
+
+    def _on_realize(self, _widget) -> None:
+        """Make the surface click-through once it exists."""
+        if cairo is None:
+            return
+        surface = self.window.get_surface()
+        if surface is not None:
+            # An empty input region means pointer events land on whatever is
+            # underneath, so the overlay cannot swallow a click.
+            surface.set_input_region(cairo.Region())
+
+    def apply(self, event: dict) -> None:
+        self.state.apply(event)
+        self.render()
+
+    def render(self) -> None:
+        state = self.state
+
+        if not state.visible:
+            self.window.set_visible(False)
+            return
+
+        self.status_label.set_text(state.label)
+        self._set_tone(state.tone)
+
+        # Faded rather than hidden: hiding them takes their height out of the
+        # header and shortens the card, which is a resize by another name.
+        self.dots.set_opacity(1.0 if state.listening else 0.0)
+        self.dots.update(state.levels if state.listening else [])
+
+        final, draft = transcript_tail(state.final, state.draft)
+        markup = transcript_markup(final, draft)
+        self.transcript_label.set_markup(markup)
+        # Shown only when there is something in it. The indicator row does not
+        # move when this appears, so it is free to come and go.
+        self.transcript_label.set_visible(bool(markup))
+
+        self.error_label.set_text(state.error)
+        self.error_label.set_visible(bool(state.error))
+        if state.error:
+            self.root.add_css_class("error")
+            self._clear_error_later()
+        else:
+            self.root.remove_css_class("error")
+
+        self.window.set_visible(True)
+
+    def _set_tone(self, tone: str) -> None:
+        for name in ("live", "working", "injecting", "failed"):
+            if name != tone:
+                self.dot.remove_css_class(name)
+        self.dot.add_css_class(tone)
+
+    def _clear_error_later(self) -> None:
+        if self.error_timeout is not None:
+            GLib.source_remove(self.error_timeout)
+
+        def clear() -> bool:
+            self.error_timeout = None
+            self.state.error = ""
+            self.render()
+            return GLib.SOURCE_REMOVE
+
+        self.error_timeout = GLib.timeout_add(ERROR_LINGER_MS, clear)
+
+    def disconnected(self) -> None:
+        """Hide while there is no daemon to report on."""
+        self.state = State()
+        self.render()
+
+
+def transcript_tail(
+    final: str, draft: str, budget: int = TRANSCRIPT_BUDGET
+) -> tuple[str, str]:
+    """The newest `budget` characters of the transcript, cut at a word break.
+
+    A run-on sentence grows without bound, and the end of it is the part still
+    worth checking, so the card shows a window onto the end rather than
+    growing to fit everything said so far.
+    """
+    if len(final) + len(draft) + 1 <= budget:
+        return final, draft
+
+    # The draft is the newest text, so it keeps the budget and the confirmed
+    # text ahead of it gives way.
+    if len(draft) >= budget:
+        return "", _elide_front(draft, budget)
+
+    return _elide_front(final, budget - len(draft) - 1), draft
+
+
+def _elide_front(text: str, room: int) -> str:
+    """The tail of `text` that fits in `room`, marked as having a front cut."""
+    if len(text) <= room:
+        return text
+
+    kept = text[-max(room - len(ELLIPSIS) - 1, 0):]
+    # Start on a whole word: a tail beginning mid-word reads as a typo.
+    space = kept.find(" ")
+    if space != -1:
+        kept = kept[space + 1:]
+    return f"{ELLIPSIS} {kept}" if kept else ELLIPSIS
+
+
+def transcript_markup(final: str, draft: str) -> str:
+    """Confirmed text at full opacity, the unconfirmed tail dimmed."""
+    parts = []
+    if final:
+        parts.append(GLib.markup_escape_text(final))
+    if draft:
+        parts.append(f'<span alpha="45%">{GLib.markup_escape_text(draft)}</span>')
+    return " ".join(parts)
+
+
+def stream_events(path: Path):
+    """Yield status events from the daemon, or None when the stream drops."""
+    while True:
+        try:
+            conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            conn.connect(str(path))
+            conn.sendall(STREAM_COMMAND)
+        except OSError:
+            yield None
+            threading.Event().wait(RECONNECT_SECONDS)
+            continue
+
+        with conn, conn.makefile("r", encoding="utf-8") as lines:
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    yield json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+        yield None
+        threading.Event().wait(RECONNECT_SECONDS)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--anchor",
+        choices=("center", "top", "bottom"),
+        default="bottom",
+        help="where to place the indicator (default: bottom)",
+    )
+    parser.add_argument(
+        "--margin",
+        type=int,
+        default=160,
+        help="distance in pixels from the anchored edge (default: 160)",
+    )
+    parser.add_argument(
+        "--socket",
+        type=Path,
+        default=None,
+        help="daemon control socket (default: ~/.cache/hyprvoice/control.sock)",
+    )
+    args = parser.parse_args()
+
+    path = args.socket or socket_path()
+    app = Gtk.Application(application_id="dev.hyprvoice.Overlay")
+    overlay: Overlay | None = None
+
+    def on_activate(application: Gtk.Application) -> None:
+        nonlocal overlay
+
+        # Checked here rather than before the app runs: the answer depends on
+        # the display connection, which GTK only makes on activation.
+        if not LayerShell.is_supported():
+            print(
+                "hyprvoice-overlay: compositor does not support wlr-layer-shell",
+                file=sys.stderr,
+            )
+            application.quit()
+            return
+
+        provider = Gtk.CssProvider()
+        provider.load_from_data(STYLE)
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+
+        overlay = Overlay(application, args.anchor, args.margin)
+        # Held open by the reader thread rather than by a visible window, which
+        # comes and goes with the daemon's state.
+        application.hold()
+        start_reader(overlay, path)
+
+    app.connect("activate", on_activate)
+    return app.run([])
+
+
+def start_reader(overlay: Overlay, path: Path) -> None:
+    """Read the stream off the main loop, applying events on it."""
+
+    def read() -> None:
+        for event in stream_events(path):
+            if event is None:
+                GLib.idle_add(overlay.disconnected)
+            else:
+                GLib.idle_add(overlay.apply, event)
+
+    thread = threading.Thread(target=read, name="status-stream", daemon=True)
+    thread.start()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

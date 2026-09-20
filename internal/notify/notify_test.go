@@ -127,3 +127,52 @@ func TestSend_UnknownMessageType(t *testing.T) {
 	// Should not panic with unknown message type
 	desktop.Send(MessageType(999))
 }
+
+func TestOverlay_SendPublishesResolvedMessage(t *testing.T) {
+	// Arrange
+	var published []Message
+	overlay := NewOverlay(testMessages(), func(m Message) { published = append(published, m) })
+
+	// Act
+	overlay.Send(MsgRecordingStarted)
+
+	// Assert
+	if len(published) != 1 {
+		t.Fatalf("published %d messages, want 1", len(published))
+	}
+	want := Message{Title: "Hyprvoice", Body: "Recording Started"}
+	if published[0] != want {
+		t.Errorf("published %+v, want %+v", published[0], want)
+	}
+}
+
+func TestOverlay_SendIgnoresUnknownMessageType(t *testing.T) {
+	// Arrange
+	var published []Message
+	overlay := NewOverlay(map[MessageType]Message{}, func(m Message) { published = append(published, m) })
+
+	// Act
+	overlay.Send(MsgRecordingStarted)
+
+	// Assert
+	if len(published) != 0 {
+		t.Errorf("published %+v, want nothing for an unconfigured message", published)
+	}
+}
+
+func TestOverlay_ErrorPublishesErrorMessage(t *testing.T) {
+	// Arrange
+	var published []Message
+	overlay := NewOverlay(testMessages(), func(m Message) { published = append(published, m) })
+
+	// Act
+	overlay.Error("transcription failed")
+
+	// Assert
+	if len(published) != 1 {
+		t.Fatalf("published %d messages, want 1", len(published))
+	}
+	if !published[0].IsError || published[0].Body != "transcription failed" {
+		t.Errorf("published %+v, want the error body flagged as an error", published[0])
+	}
+}

@@ -34,3 +34,5 @@ go.work.sum
 packaging/hyprvoice-v*
 tmp/*
 CLAUDE.md
+__pycache__/
+*.pyc

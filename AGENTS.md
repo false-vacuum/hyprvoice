@@ -6,6 +6,7 @@ This repo is a Go CLI + daemon for voice-powered typing on Wayland/Hyprland.
 - go mod download
 - go build -o hyprvoice ./cmd/hyprvoice
 - go run ./cmd/hyprvoice
+- overlay client checks: python3 overlay/test_state.py
 
 ## Main structure (short)
 - cmd/hyprvoice: CLI entrypoint and commands
@@ -17,9 +18,11 @@ This repo is a Go CLI + daemon for voice-powered typing on Wayland/Hyprland.
 - internal/injection: wtype/ydotool/clipboard backends
 - internal/provider: provider registry + model metadata
 - internal/config: config load/validate + hot reload
+- overlay: on-screen indicator client (Python + GTK4 layer shell), optional
 
 ## Runtime quick facts
 - IPC: unix socket at ~/.cache/hyprvoice/control.sock, single-character commands
+- `w` holds the connection open and streams JSON status events (drives the overlay)
 - Config: ~/.config/hyprvoice/config.toml (hot reloaded by daemon)
 
 ## Configuration

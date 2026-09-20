@@ -167,9 +167,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("invalid injection.clipboard_timeout: %v", c.Injection.ClipboardTimeout)
 	}
 
-	validTypes := map[string]bool{"desktop": true, "log": true, "none": true}
+	validTypes := map[string]bool{"desktop": true, "overlay": true, "log": true, "none": true}
 	if !validTypes[c.Notifications.Type] {
-		return fmt.Errorf("invalid notifications.type: %s (must be desktop, log, or none)", c.Notifications.Type)
+		return fmt.Errorf("invalid notifications.type: %s (must be desktop, overlay, log, or none)", c.Notifications.Type)
 	}
 
 	return nil

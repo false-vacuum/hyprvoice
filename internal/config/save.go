@@ -278,12 +278,12 @@ keywords = []
   clipboard_timeout = "3s"     # Timeout for clipboard operations
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Desktop Notifications
+# Notifications
 # ─────────────────────────────────────────────────────────────────────────────
 
 [notifications]
-  enabled = true               # Enable desktop notifications
-  type = "desktop"             # "desktop", "log", or "none"
+  enabled = true               # Enable notifications
+  type = "desktop"             # "desktop", "overlay", "log", or "none"
 
   # Custom notification messages (optional - defaults shown below)
   # Uncomment and modify to customize notification text

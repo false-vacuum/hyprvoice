@@ -10,7 +10,10 @@ type Notifier interface {
 	Error(msg string) // for dynamic errors (e.g., pipeline errors)
 }
 
-// NewNotifier creates a notifier based on type with resolved messages
+// NewNotifier creates a notifier based on type with resolved messages.
+//
+// The "overlay" type is not built here: it needs somewhere to publish to, so
+// the daemon constructs it with NewOverlay.
 func NewNotifier(notifType string, messages map[MessageType]Message) Notifier {
 	switch notifType {
 	case "desktop":
@@ -20,6 +23,30 @@ func NewNotifier(notifType string, messages map[MessageType]Message) Notifier {
 	default:
 		return &Nop{}
 	}
+}
+
+// Overlay publishes messages to the on-screen indicator instead of to a
+// notification daemon. It only hands the message over; the daemon carries it
+// on the status stream and the overlay client draws it.
+type Overlay struct {
+	messages map[MessageType]Message
+	publish  func(Message)
+}
+
+func NewOverlay(messages map[MessageType]Message, publish func(Message)) *Overlay {
+	return &Overlay{messages: messages, publish: publish}
+}
+
+func (o *Overlay) Send(mt MessageType) {
+	msg, ok := o.messages[mt]
+	if !ok {
+		return
+	}
+	o.publish(msg)
+}
+
+func (o *Overlay) Error(msg string) {
+	o.publish(Message{Body: msg, IsError: true})
 }
 
 type Desktop struct {

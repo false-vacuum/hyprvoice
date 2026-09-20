@@ -614,6 +614,7 @@ func newNotificationTypeScreen(state *wizardState, onBack func() screen) screen 
 	}
 	items := []optionItem{
 		{title: "Recommended: Desktop notifications", desc: "Uses notify-send to show popups.", value: "desktop"},
+		{title: "On-screen overlay", desc: "Shows an indicator near the center of the screen, with live text while transcribing. Needs hyprvoice-overlay installed.", value: "overlay"},
 		{title: "Log to console", desc: "Only use for development, or if you want to plug it to something else. Write status changes to logs only.", value: "log"},
 		{title: "None", desc: "Disable notifications entirely.", value: "none"},
 	}

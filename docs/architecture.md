@@ -20,10 +20,23 @@ Hyprvoice is split into a thin CLI and a long-lived daemon. The CLI sends single
 The daemon listens on a unix socket and accepts single-character commands.
 
 - Socket path: `~/.cache/hyprvoice/control.sock` (see `internal/bus/bus.go`).
-- Command bytes: `t` toggle, `c` cancel, `s` status, `v` version, `q` quit.
+- Command bytes: `t` toggle, `c` cancel, `s` status, `w` watch, `v` version, `q` quit.
 - Responses are line-based: `OK ...`, `STATUS ...`, or `ERR ...`.
 
 The CLI writes one command byte and reads the response; the daemon maps commands to pipeline actions.
+
+### Status stream
+`w` is the exception: the daemon holds the connection open and writes one JSON event per line until the client disconnects, which is what `hyprvoice status --follow --format json` reads. `bus.SendCommand` covers the request/response commands; `bus.OpenStream` hands back the open connection for this one.
+
+An event (`pipeline.StatusEvent`) carries:
+
+- `status`: the pipeline state.
+- `listening`: whether the microphone is open. Separate from `status` because with a streaming transcriber the pipeline sits in `transcribing` for the whole utterance, so status alone cannot say whether the user is still speaking.
+- `levels`: normalized 0..1 loudness values for the audio since the last event. Measured only while something is subscribed.
+- `transcript`: `final` and `draft`, on events driven by a streaming transcriber.
+- `notice`: a user-facing message, on events the daemon publishes in place of a desktop notification.
+
+`internal/daemon/stream.go` fans events out through a hub whose sends never block: a subscriber that stops reading loses events rather than stalling the pipeline that produced them.
 
 ## Pipeline state machine
 The pipeline is a long-lived goroutine managed by the daemon. It exposes a small interface and uses channels to coordinate actions and notifications.
@@ -104,6 +117,20 @@ Each `Model` includes:
 
 ## Notifications and errors
 The pipeline emits notification events and errors via channels. The daemon consumes them and uses `internal/notify` to display status changes to the user.
+
+`notifications.type` selects the notifier: `desktop` (notify-send), `overlay`, `log`, or `none`.
+
+## Overlay
+The overlay is an on-screen indicator near the center of the screen, showing what the daemon is doing and, while a streaming model is running, the transcript as it is recognised: confirmed text at full opacity, the unconfirmed tail dimmed.
+
+It is a separate process (`overlay/hyprvoice-overlay`, Python + GTK4 + gtk4-layer-shell) rather than part of the daemon, because Go has no practical wlr-layer-shell binding. It is an ordinary subscriber to the status stream, so the daemon neither depends on it nor waits for it, and runs unchanged when it is absent.
+
+Two pieces connect them:
+
+- `notify.Overlay` publishes messages onto the status stream instead of shelling out to `notify-send`. It only hands the message over; the overlay draws it.
+- `internal/daemon/overlay.go` keeps one overlay process running while `notifications.type` is `overlay`, restarting it if it exits and logging a warning if it is not installed. `HYPRVOICE_OVERLAY_CMD` overrides the command, for running it from a checkout.
+
+The surface takes no keyboard focus and has an empty input region, so it can neither steal input from the window being dictated into nor swallow a click.
 
 ## Extending the system
 Common extension points:

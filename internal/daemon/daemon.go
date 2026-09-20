@@ -26,6 +26,8 @@ type Daemon struct {
 	cancel context.CancelFunc
 
 	pipeline pipeline.Pipeline
+	hub      *streamHub
+	overlay  *overlaySupervisor
 
 	wg sync.WaitGroup
 }
@@ -46,13 +48,29 @@ func New() (*Daemon, error) {
 	}
 
 	d := &Daemon{
-		notifier:  notify.NewNotifier(notifType, conf.Notifications.Messages.Resolve()),
 		configMgr: configMgr,
+		hub:       newStreamHub(),
+		overlay:   newOverlaySupervisor(),
 		ctx:       ctx,
 		cancel:    cancel,
 	}
+	d.notifier = d.newNotifier(notifType, conf.Notifications.Messages.Resolve())
+	d.hub.setOnCount(d.setLevelsWanted)
 
 	return d, nil
+}
+
+// newNotifier builds the configured notifier, and starts or stops the overlay
+// client to match. The overlay is the only notifier the daemon has to run a
+// process for.
+func (d *Daemon) newNotifier(notifType string, messages map[notify.MessageType]notify.Message) notify.Notifier {
+	if notifType != "overlay" {
+		d.overlay.stop()
+		return notify.NewNotifier(notifType, messages)
+	}
+
+	d.overlay.start(d.ctx)
+	return notify.NewOverlay(messages, d.publishNotice)
 }
 
 func (d *Daemon) onConfigReload() {
@@ -61,8 +79,10 @@ func (d *Daemon) onConfigReload() {
 
 	conf := d.configMgr.GetConfig()
 
+	notifier := d.newNotifier(conf.Notifications.Type, conf.Notifications.Messages.Resolve())
+
 	d.mu.Lock()
-	d.notifier = notify.NewNotifier(conf.Notifications.Type, conf.Notifications.Messages.Resolve())
+	d.notifier = notifier
 	d.mu.Unlock()
 
 	d.notifier.Send(notify.MsgConfigReloaded)
@@ -89,6 +109,10 @@ func (d *Daemon) stopPipeline() {
 }
 
 func (d *Daemon) Run() error {
+	// First, so an overlay started during New() is stopped even when the
+	// daemon fails to come up.
+	defer d.overlay.stop()
+
 	if err := bus.CheckExistingDaemon(); err != nil {
 		return err
 	}
@@ -172,6 +196,8 @@ func (d *Daemon) handle(c net.Conn) {
 	case 's':
 		status := d.status()
 		fmt.Fprintf(c, "STATUS status=%s\n", status)
+	case 'w':
+		d.streamStatus(c)
 	case 'v':
 		fmt.Fprintf(c, "STATUS proto=%s\n", bus.ProtoVer)
 	case 'q':
@@ -192,11 +218,17 @@ func (d *Daemon) toggle() {
 	switch d.status() {
 	case pipeline.Idle:
 		p := pipeline.New(conf)
-		p.Run(d.ctx)
+		p.SetLevelsWanted(d.hub.count() > 0)
 
 		d.mu.Lock()
 		d.pipeline = p
 		d.mu.Unlock()
+
+		// Subscribed before Run so the opening transitions cannot be missed.
+		go d.monitorPipelineEvents(p)
+		go d.monitorPipelinePartials(p)
+
+		p.Run(d.ctx)
 
 		go d.notifier.Send(notify.MsgRecordingStarted)
 		go d.monitorPipelineErrors(p)

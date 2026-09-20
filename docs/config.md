@@ -505,19 +505,56 @@ sudo usermod -aG input $USER
 
 ## Notifications
 
-Desktop notification settings:
+Notification settings:
 
 ```toml
 [notifications]
 enabled = true             # Enable/disable notifications
-type = "desktop"           # "desktop", "log", or "none"
+type = "desktop"           # "desktop", "overlay", "log", or "none"
 ```
 
 ### Notification Types
 
 - **`desktop`**: Use notify-send for desktop notifications
+- **`overlay`**: Show the on-screen indicator instead (see below)
 - **`log`**: Log messages to console only
 - **`none`**: Disable all notifications
+
+### Overlay
+
+The overlay is a small always-on-top indicator near the center of the screen. It shows what the daemon is doing, a live level meter while the microphone is open, and, with a streaming model, the transcript as it is recognised: confirmed text at full opacity and the unconfirmed tail dimmed. It disappears when the pipeline returns to idle.
+
+It replaces notifications rather than adding to them: with `type = "overlay"`, nothing is sent to `notify-send`.
+
+**Requirements:** `gtk4`, `gtk4-layer-shell` (1.0 or newer), `python-gobject`, and a compositor with `wlr-layer-shell` (sway, Hyprland, river, and others).
+
+**Install** the client somewhere on `PATH`:
+
+```bash
+install -Dm755 overlay/hyprvoice-overlay ~/.local/bin/hyprvoice-overlay
+```
+
+The daemon starts it when `notifications.type` is `overlay`, restarts it if it exits, and carries on without it if it is not installed. To run it from a checkout, or to change where it sits on screen, point `HYPRVOICE_OVERLAY_CMD` at it:
+
+```bash
+HYPRVOICE_OVERLAY_CMD="$PWD/overlay/hyprvoice-overlay --anchor bottom --margin 200"
+```
+
+`--anchor` takes `bottom` (default), `top` or `center`, and `--margin` is the distance in pixels from that edge.
+
+A daemon started by systemd does not have `~/.local/bin` on its `PATH`, so it looks there directly as well as on `PATH`.
+
+The client's state handling has its own checks:
+
+```bash
+python3 overlay/test_state.py
+```
+
+The overlay is an ordinary client of the daemon's status stream, so you can also run it yourself, or build your own indicator on the same data:
+
+```bash
+hyprvoice status --follow --format json
+```
 
 ### Custom Notification Messages
 

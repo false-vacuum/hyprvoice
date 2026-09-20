@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/leonardotrapani/hyprvoice/internal/config"
 	"github.com/leonardotrapani/hyprvoice/internal/injection"
@@ -37,18 +38,56 @@ const (
 	Cancel Action = "cancel"
 )
 
+// StatusEvent is a point-in-time snapshot of the pipeline, published to
+// subscribers of the daemon's status stream.
+type StatusEvent struct {
+	Status Status `json:"status"`
+
+	// Listening reports whether the microphone is currently open. It is
+	// deliberately separate from Status: with a streaming transcriber the
+	// pipeline sits in Transcribing for the whole time the user is speaking,
+	// so Status alone cannot tell an indicator when to show "listening".
+	Listening bool `json:"listening"`
+
+	// Levels carries normalised 0..1 loudness values covering the audio since
+	// the previous event, oldest first. Empty on a status change.
+	Levels []float64 `json:"levels,omitempty"`
+
+	// Transcript is the transcript as it stands, carried on events driven by a
+	// streaming transcriber. Absent on plain status changes and on batch
+	// models, which have nothing to show until the audio is over.
+	Transcript *transcriber.TranscriptUpdate `json:"transcript,omitempty"`
+
+	// Notice is a user-facing message, carried on events the daemon publishes
+	// in place of a desktop notification. Absent otherwise.
+	Notice *notify.Message `json:"notice,omitempty"`
+
+	At time.Time `json:"at"`
+}
+
 type Pipeline interface {
 	Run(ctx context.Context)
 	Stop()
 	Status() Status
+
+	// Listening reports whether the microphone is open, which Status cannot
+	// express on its own -- see StatusEvent.Listening.
+	Listening() bool
+
 	GetActionCh() chan<- Action
 	GetErrorCh() <-chan PipelineError
 	GetNotifyCh() <-chan notify.MessageType
+	GetEventCh() <-chan StatusEvent
 
 	// GetPartialCh emits transcript snapshots while a streaming transcriber is
 	// running. A batch transcriber produces none, so consumers must treat the
 	// channel going quiet as normal and fall back to status alone.
 	GetPartialCh() <-chan transcriber.TranscriptUpdate
+
+	// SetLevelsWanted controls whether audio loudness is measured while
+	// recording. The daemon enables it only while something is subscribed to
+	// the status stream, so an unwatched pipeline does no extra work.
+	SetLevelsWanted(bool)
 }
 
 // Factory types for dependency injection
@@ -92,11 +131,17 @@ func WithLLMAdapterFactory(f LLMAdapterFactory) Option {
 // is not keeping up. Each one supersedes the last, so a shallow buffer suffices.
 const partialBuffer = 16
 
+// eventBuffer absorbs a burst of level events while a slow subscriber is being
+// served. Sends drop rather than block, so a stalled reader can never hold up
+// the audio path.
+const eventBuffer = 64
+
 type pipeline struct {
 	status    Status
 	actionCh  chan Action
 	errorCh   chan PipelineError
 	notifyCh  chan notify.MessageType
+	eventCh   chan StatusEvent
 	partialCh chan transcriber.TranscriptUpdate
 	config    *config.Config
 
@@ -105,7 +150,9 @@ type pipeline struct {
 	cancel   context.CancelFunc
 	stopOnce sync.Once
 
-	running atomic.Bool
+	running      atomic.Bool
+	listening    atomic.Bool
+	levelsWanted atomic.Bool
 
 	// dependency factories (for testing)
 	recorderFactory    RecorderFactory
@@ -116,9 +163,16 @@ type pipeline struct {
 
 func New(cfg *config.Config, opts ...Option) Pipeline {
 	p := &pipeline{
-		actionCh:  make(chan Action, 1),
-		errorCh:   make(chan PipelineError, 10),
-		notifyCh:  make(chan notify.MessageType, 10),
+		// Explicit, so a pipeline that has been constructed but not yet run
+		// reports idle rather than the empty string.
+		status:   Idle,
+		actionCh: make(chan Action, 1),
+		errorCh:  make(chan PipelineError, 10),
+		notifyCh: make(chan notify.MessageType, 10),
+		// Deep enough to absorb a burst of level events while a slow
+		// subscriber is being served; sends drop rather than block, so a
+		// stalled reader can never hold up the audio path.
+		eventCh:   make(chan StatusEvent, eventBuffer),
 		partialCh: make(chan transcriber.TranscriptUpdate, partialBuffer),
 		config:    cfg,
 		// default factories
@@ -150,6 +204,7 @@ func (p *pipeline) Run(ctx context.Context) {
 func (p *pipeline) run(ctx context.Context) {
 	defer func() {
 		p.running.Store(false)
+		p.setListening(false)
 		p.setStatus(Idle)
 		p.wg.Done()
 	}()
@@ -167,6 +222,25 @@ func (p *pipeline) run(ctx context.Context) {
 	}
 
 	defer recorder.Stop()
+	p.setListening(true)
+
+	// Measure loudness on the way past. The tap forwards every frame
+	// untouched; it exists so an indicator can show a real waveform instead of
+	// an animation pretending to be the user's voice.
+	recCfg := p.config.ToRecordingConfig()
+	frameCh = tapLevels(
+		ctx, frameCh,
+		recCfg.ChannelBufferSize, recCfg.SampleRate, recCfg.Channels,
+		p.levelsWanted.Load,
+		func(levels []float64) {
+			p.emit(StatusEvent{
+				Status:    p.Status(),
+				Listening: true,
+				Levels:    levels,
+				At:        time.Now(),
+			})
+		},
+	)
 
 	t, err := p.transcriberFactory(p.config.ToTranscriberConfig())
 	if err != nil {
@@ -234,8 +308,41 @@ func (p *pipeline) Status() Status {
 
 func (p *pipeline) setStatus(status Status) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.status = status
+	p.mu.Unlock()
+
+	p.emit(StatusEvent{Status: status, Listening: p.listening.Load(), At: time.Now()})
+}
+
+// emit publishes an event, discarding it if no subscriber is keeping up.
+// Status is always readable via the Status() snapshot, so a dropped event
+// costs a frame of animation, never correctness.
+func (p *pipeline) emit(ev StatusEvent) {
+	select {
+	case p.eventCh <- ev:
+	default:
+	}
+}
+
+func (p *pipeline) GetEventCh() <-chan StatusEvent {
+	return p.eventCh
+}
+
+func (p *pipeline) Listening() bool {
+	return p.listening.Load()
+}
+
+func (p *pipeline) SetLevelsWanted(wanted bool) {
+	p.levelsWanted.Store(wanted)
+}
+
+// setListening records whether the microphone is open and republishes the
+// current status so subscribers see the transition.
+func (p *pipeline) setListening(listening bool) {
+	if p.listening.Swap(listening) == listening {
+		return
+	}
+	p.emit(StatusEvent{Status: p.Status(), Listening: listening, At: time.Now()})
 }
 
 func (p *pipeline) setCancel(cancel context.CancelFunc) {
@@ -334,6 +441,7 @@ func (p *pipeline) handleInjectAction(ctx context.Context, recorder recording.Re
 	p.setStatus(Injecting)
 
 	recorder.Stop()
+	p.setListening(false)
 
 	if err := t.Stop(ctx); err != nil {
 		p.sendError("Transcription Error", "Failed to stop transcriber during injection", err)
