@@ -105,51 +105,107 @@ func TestBuildUserPrompt(t *testing.T) {
 }
 
 func TestNewAdapter(t *testing.T) {
-	// Test OpenAI adapter creation
-	openaiCfg := Config{
-		Provider: "openai",
-		APIKey:   "sk-test-key",
-		Model:    "gpt-4o-mini",
-	}
-	adapter, err := NewAdapter(openaiCfg)
-	if err != nil {
-		t.Fatalf("failed to create openai adapter: %v", err)
-	}
-	if _, ok := adapter.(*OpenAIAdapter); !ok {
-		t.Error("expected OpenAIAdapter type")
-	}
-
-	// Test Groq adapter creation
-	groqCfg := Config{
-		Provider: "groq",
-		APIKey:   "gsk_test-key",
-		Model:    "llama-3.3-70b-versatile",
-	}
-	adapter, err = NewAdapter(groqCfg)
-	if err != nil {
-		t.Fatalf("failed to create groq adapter: %v", err)
-	}
-	if _, ok := adapter.(*GroqAdapter); !ok {
-		t.Error("expected GroqAdapter type")
-	}
-
-	// Test missing API key
-	noKeyCfg := Config{
-		Provider: "openai",
-		APIKey:   "",
-	}
-	_, err = NewAdapter(noKeyCfg)
-	if err == nil {
-		t.Error("expected error for missing API key")
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr bool
+	}{
+		{
+			name:    "builds adapter for a hosted provider",
+			cfg:     Config{Provider: "openai", BaseURL: "https://api.openai.com/v1", APIKey: "sk-test-key", Model: "gpt-4o-mini", RequiresAPIKey: true},
+			wantErr: false,
+		},
+		{
+			name:    "builds adapter for a keyless local endpoint",
+			cfg:     Config{Provider: "openai-compatible", BaseURL: "http://localhost:11434/v1", Model: "qwen3:8b"},
+			wantErr: false,
+		},
+		{
+			name:    "rejects missing base URL",
+			cfg:     Config{Provider: "openai", APIKey: "sk-test-key", Model: "gpt-4o-mini"},
+			wantErr: true,
+		},
+		{
+			name:    "rejects missing model",
+			cfg:     Config{Provider: "openai", BaseURL: "https://api.openai.com/v1", APIKey: "sk-test-key"},
+			wantErr: true,
+		},
+		{
+			name:    "rejects missing key when the provider needs one",
+			cfg:     Config{Provider: "openai", BaseURL: "https://api.openai.com/v1", Model: "gpt-4o-mini", RequiresAPIKey: true},
+			wantErr: true,
+		},
 	}
 
-	// Test unsupported provider
-	badCfg := Config{
-		Provider: "unsupported",
-		APIKey:   "key",
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			adapter, err := NewAdapter(tc.cfg)
+
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected an error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if _, ok := adapter.(*ChatAdapter); !ok {
+				t.Errorf("expected *ChatAdapter, got %T", adapter)
+			}
+		})
 	}
-	_, err = NewAdapter(badCfg)
-	if err == nil {
-		t.Error("expected error for unsupported provider")
+}
+
+func TestStripPreamble(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "leaves clean output alone",
+			input:    "The meeting is at three.",
+			expected: "The meeting is at three.",
+		},
+		{
+			name:     "removes a conversational lead-in",
+			input:    "Sure, here's the cleaned-up text:\nThe meeting is at three.",
+			expected: "The meeting is at three.",
+		},
+		{
+			name:     "removes a code fence",
+			input:    "```\nThe meeting is at three.\n```",
+			expected: "The meeting is at three.",
+		},
+		{
+			name:     "removes a lead-in wrapping a fence",
+			input:    "Here is the corrected text:\n```\nThe meeting is at three.\n```",
+			expected: "The meeting is at three.",
+		},
+		{
+			name:     "keeps dictation that merely starts with here is the",
+			input:    "Here is the thing:\nI never agreed to that.",
+			expected: "Here is the thing:\nI never agreed to that.",
+		},
+		{
+			name:     "keeps a colon line that is not a known lead-in",
+			input:    "Shopping list:\nbread, milk",
+			expected: "Shopping list:\nbread, milk",
+		},
+		{
+			name:     "keeps multi-line dictation",
+			input:    "First point.\nSecond point.",
+			expected: "First point.\nSecond point.",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := StripPreamble(tc.input)
+			if result != tc.expected {
+				t.Errorf("expected %q, got %q", tc.expected, result)
+			}
+		})
 	}
 }

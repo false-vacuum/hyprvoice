@@ -367,8 +367,45 @@ LLM post-processing is **enabled by default** and significantly improves transcr
 ```toml
 [llm]
   enabled = true               # Disable with false if you want raw transcriptions
-  provider = "openai"          # "openai" or "groq"
-  model = "gpt-4o-mini"        # OpenAI: "gpt-4o-mini", Groq: "llama-3.3-70b-versatile"
+  provider = "groq"            # "groq", "openrouter", "openai", or "openai-compatible"
+  model = "openai/gpt-oss-20b"
+```
+
+### Any OpenAI-Compatible Endpoint
+
+Set `provider = "openai-compatible"` and give a `base_url` to use any service
+speaking the OpenAI chat completions API, including a model running on your own
+machine:
+
+```toml
+[llm]
+  enabled = true
+  provider = "openai-compatible"
+  base_url = "http://localhost:11434/v1"   # Ollama
+  model = "qwen3:8b"
+```
+
+`base_url` is the API root ending at the version segment. Do not include
+`/chat/completions`, which is appended for you. Common roots:
+
+| Server    | base_url                       |
+| --------- | ------------------------------ |
+| Ollama    | `http://localhost:11434/v1`    |
+| LM Studio | `http://localhost:1234/v1`     |
+| llama.cpp | `http://localhost:8080/v1`     |
+| vLLM      | `http://localhost:8000/v1`     |
+
+A local server needs no key. For a hosted gateway that wants one, set
+`providers.openai-compatible.api_key` or `HYPRVOICE_LLM_API_KEY`.
+
+`base_url` also works with a named provider, which points that provider at a
+proxy or a regional endpoint while keeping its model list:
+
+```toml
+[llm]
+  provider = "openai"
+  base_url = "https://gateway.internal/openai/v1"
+  model = "gpt-4o-mini"
 ```
 
 ### Post-Processing Options
@@ -402,10 +439,17 @@ Add custom instructions for specific use cases:
 
 ### LLM Provider Recommendations
 
-| Provider | Model                   | Best For                            |
-| -------- | ----------------------- | ----------------------------------- |
-| OpenAI   | gpt-4o-mini             | Best quality/cost balance (default) |
-| Groq     | llama-3.3-70b-versatile | Fastest processing, free tier       |
+Cleanup is a mechanical edit that every model here handles, and you wait on the
+result before anything is typed, so pick for speed rather than reasoning
+ability. Avoid reasoning models: thinking tokens add seconds to a task that
+needs none.
+
+| Provider          | Model                          | Best For                                 |
+| ----------------- | ------------------------------ | ---------------------------------------- |
+| Groq              | openai/gpt-oss-20b        | Fastest processing, free tier            |
+| OpenRouter        | google/gemini-2.5-flash-lite   | One key across vendors; cheap and fast   |
+| OpenAI            | gpt-4o-mini                    | Balanced quality and cost                |
+| openai-compatible | any (e.g. an 8B local model)   | Privacy, offline use, no per-token cost  |
 
 ## Keywords
 
@@ -639,7 +683,7 @@ You can customize notification text via the `[notifications.messages]` section:
 [llm]
   enabled = true
   provider = "groq"
-  model = "llama-3.3-70b-versatile"
+  model = "openai/gpt-oss-20b"
 ```
 
 ### Mixed Providers (Groq Transcription + OpenAI LLM)

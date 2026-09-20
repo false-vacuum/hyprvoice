@@ -8,6 +8,9 @@ const (
 	ProviderElevenLabs = "elevenlabs"
 	ProviderDeepgram   = "deepgram"
 	ProviderWhisperCpp = "whisper-cpp"
+	ProviderOpenRouter = "openrouter"
+	// ProviderCustom is any user-supplied OpenAI-compatible endpoint.
+	ProviderCustom = "openai-compatible"
 )
 
 // Config provider names (used in config file transcription.provider)
@@ -27,6 +30,8 @@ const (
 	EnvMistralKey    = "MISTRAL_API_KEY"
 	EnvElevenLabsKey = "ELEVENLABS_API_KEY"
 	EnvDeepgramKey   = "DEEPGRAM_API_KEY"
+	EnvOpenRouterKey = "OPENROUTER_API_KEY"
+	EnvCustomKey     = "HYPRVOICE_LLM_API_KEY"
 )
 
 // Adapter type constants for transcription backends
@@ -67,6 +72,10 @@ func EnvVarForProvider(provider string) string {
 		return EnvElevenLabsKey
 	case ProviderDeepgram:
 		return EnvDeepgramKey
+	case ProviderOpenRouter:
+		return EnvOpenRouterKey
+	case ProviderCustom:
+		return EnvCustomKey
 	default:
 		return ""
 	}

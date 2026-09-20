@@ -395,7 +395,7 @@ func newLLMEnableScreen(state *wizardState, onBack func() screen, onNext func() 
 func newLLMProviderScreen(state *wizardState, onBack func() screen, onNext func() screen) screen {
 	options := buildLLMProviderOptions(state.cfg)
 	if len(options) == 0 {
-		info := []string{"No LLM providers available.", "Configure OpenAI or Groq first."}
+		info := []string{"No LLM providers available."}
 		s := newInfoScreen(state, "LLM Provider", info, onBack, onBack)
 		s.footer = "enter back • esc back"
 		return s
@@ -404,6 +404,11 @@ func newLLMProviderScreen(state *wizardState, onBack func() screen, onNext func(
 	desc := []string{"Choose a provider for text post-processing.", "Tip: press / to filter."}
 	screen := newListScreen(state, "LLM Provider", desc, options, func(item optionItem) screen {
 		providerName := item.value
+		// A custom endpoint asks for a URL and a model id instead of a key,
+		// since the registry knows neither and local servers need no key.
+		if provider.IsCustom(providerName) {
+			return newLLMBaseURLScreen(state, onBack, onNext)
+		}
 		if !isProviderConfigured(state.cfg, providerName) {
 			return newProviderKeyFlow(state, providerName, func() screen {
 				return newLLMModelScreen(state, providerName, onBack, onNext)
@@ -416,6 +421,52 @@ func newLLMProviderScreen(state *wizardState, onBack func() screen, onNext func(
 		selectListByValue(&screen.list, state.cfg.LLM.Provider)
 	}
 	return screen
+}
+
+// newLLMBaseURLScreen collects the API root for a custom OpenAI-compatible
+// endpoint. Nothing here can be offered as a list: the server is the user's.
+func newLLMBaseURLScreen(state *wizardState, onBack func() screen, onNext func() screen) screen {
+	desc := []string{
+		"Enter an OpenAI-compatible API root.",
+		"Ollama: http://localhost:11434/v1",
+		"LM Studio: http://localhost:1234/v1",
+	}
+	return newInputScreen(state, "Endpoint URL", desc, state.cfg.LLM.BaseURL, "http://localhost:11434/v1", false,
+		validateBaseURLInput,
+		func(value string) screen {
+			state.cfg.LLM.Provider = provider.ProviderCustom
+			state.cfg.LLM.BaseURL = strings.TrimSuffix(strings.TrimSpace(value), "/")
+			return newLLMCustomModelScreen(state, onBack, onNext)
+		},
+		func() screen { return newLLMProviderScreen(state, onBack, onNext) })
+}
+
+// validateBaseURLInput mirrors config.ValidateLLMBaseURL so a bad URL is
+// caught at the prompt rather than on the next daemon reload.
+func validateBaseURLInput(value string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fmt.Errorf("endpoint URL is required")
+	}
+	return config.ValidateLLMBaseURL(provider.ProviderCustom, trimmed)
+}
+
+// newLLMCustomModelScreen takes a free-text model id, since a custom server
+// serves whatever it was started with.
+func newLLMCustomModelScreen(state *wizardState, onBack func() screen, onNext func() screen) screen {
+	desc := []string{"Enter the model id exactly as the endpoint reports it."}
+	return newInputScreen(state, "Model ID", desc, state.cfg.LLM.Model, "qwen3:8b", false,
+		func(value string) error {
+			if strings.TrimSpace(value) == "" {
+				return fmt.Errorf("model id is required")
+			}
+			return nil
+		},
+		func(value string) screen {
+			state.cfg.LLM.Model = strings.TrimSpace(value)
+			return newPostProcessingScreen(state, onBack, onNext)
+		},
+		func() screen { return newLLMBaseURLScreen(state, onBack, onNext) })
 }
 
 func newLLMModelScreen(state *wizardState, providerName string, onBack func() screen, onNext func() screen) screen {
@@ -486,7 +537,12 @@ func newPostProcessingScreen(state *wizardState, onBack func() screen, onNext fu
 		}
 		state.cfg.LLM.PostProcessing = result
 		return newCustomPromptConfirmScreen(state, onBack, onNext)
-	}, func() screen { return newLLMModelScreen(state, state.cfg.LLM.Provider, onBack, onNext) })
+	}, func() screen {
+		if provider.IsCustom(state.cfg.LLM.Provider) {
+			return newLLMCustomModelScreen(state, onBack, onNext)
+		}
+		return newLLMModelScreen(state, state.cfg.LLM.Provider, onBack, onNext)
+	})
 	screen.footer = "space toggle • enter save • esc back • / filter"
 	return screen
 }
@@ -915,31 +971,42 @@ func buildVoiceProviderOptions(cfg *config.Config) []optionItem {
 	return options
 }
 
+// llmProviderOrder lists LLM providers best-first for this job. Cleanup is a
+// mechanical edit that every model here handles, and the user waits on the
+// result before anything is typed, so the order follows latency.
+var llmProviderOrder = []struct {
+	name  string
+	title string
+	blurb string
+}{
+	{provider.ProviderGroq, "Groq Llama", "Fastest inference; generous free tier."},
+	{provider.ProviderOpenRouter, "OpenRouter", "One key for models from every vendor."},
+	{provider.ProviderOpenAI, "OpenAI GPT", "Balanced quality and cost."},
+}
+
 func buildLLMProviderOptions(cfg *config.Config) []optionItem {
-	var options []optionItem
-	configured := getConfiguredProviders(cfg)
-	for _, name := range configured {
-		p := provider.GetProvider(name)
-		if p != nil && len(provider.ModelsOfType(p, provider.LLM)) > 0 {
-			switch name {
-			case "openai":
-				options = append(options, optionItem{title: "OpenAI GPT", desc: "Configured. Balanced quality and cost.", value: "openai"})
-			case "groq":
-				options = append(options, optionItem{title: "Groq Llama", desc: "Configured. Very fast inference.", value: "groq"})
-			}
+	options := make([]optionItem, 0, len(llmProviderOrder)+1)
+	for _, entry := range llmProviderOrder {
+		p := provider.GetProvider(entry.name)
+		if p == nil || len(provider.ModelsOfType(p, provider.LLM)) == 0 {
+			continue
 		}
+		status := "Requires API key. You'll be prompted."
+		if isProviderConfigured(cfg, entry.name) {
+			status = "Configured."
+		}
+		options = append(options, optionItem{
+			title: entry.title,
+			desc:  fmt.Sprintf("%s %s", status, entry.blurb),
+			value: entry.name,
+		})
 	}
 
-	configuredSet := make(map[string]bool)
-	for _, name := range configured {
-		configuredSet[name] = true
-	}
-	if !configuredSet["openai"] {
-		options = append(options, optionItem{title: "OpenAI GPT", desc: "Requires API key. You'll be prompted.", value: "openai"})
-	}
-	if !configuredSet["groq"] {
-		options = append(options, optionItem{title: "Groq Llama", desc: "Requires API key. You'll be prompted.", value: "groq"})
-	}
+	options = append(options, optionItem{
+		title: "Custom endpoint",
+		desc:  "Any OpenAI-compatible API: Ollama, LM Studio, vLLM, a gateway.",
+		value: provider.ProviderCustom,
+	})
 
 	return options
 }
@@ -956,6 +1023,8 @@ func formatProviderOption(cfg *config.Config, name string) string {
 		return "ElevenLabs - Scribe"
 	case "deepgram":
 		return "Deepgram - Nova"
+	case "openrouter":
+		return "OpenRouter - LLM only"
 	default:
 		return name
 	}
@@ -979,6 +1048,8 @@ func formatProviderOptionDesc(cfg *config.Config, name string) string {
 		recommendation = "Recommended for best cloud quality."
 	case "deepgram":
 		recommendation = "Recommended for realtime streaming."
+	case "openrouter":
+		recommendation = "One key for LLM cleanup across vendors."
 	}
 
 	if recommendation == "" {

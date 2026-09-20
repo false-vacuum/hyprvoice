@@ -58,11 +58,12 @@ func (p *GroqProvider) Models() []Model {
 			Endpoint:           &EndpointConfig{BaseURL: "https://api.groq.com/openai", Path: "/v1/audio/transcriptions"},
 			DocsURL:            docsURL,
 		},
-		// LLM models
+		// LLM models. Groq rotates its catalog: check
+		// https://console.groq.com/docs/models before adding one here.
 		{
-			ID:                "llama-3.3-70b-versatile",
-			Name:              "Llama 3.3 70B Versatile",
-			Description:       "Best quality cleanup; smart rewrites, free tier available",
+			ID:                "openai/gpt-oss-20b",
+			Name:              "GPT-OSS 20B",
+			Description:       "Fastest good cleanup; best default",
 			Type:              LLM,
 			SupportsBatch:     true,
 			SupportsStreaming: false,
@@ -71,9 +72,20 @@ func (p *GroqProvider) Models() []Model {
 			Endpoint:          &EndpointConfig{BaseURL: "https://api.groq.com/openai", Path: "/v1/chat/completions"},
 		},
 		{
-			ID:                "llama-3.1-8b-instant",
-			Name:              "Llama 3.1 8B Instant",
-			Description:       "Very fast; good for simple cleanup tasks",
+			ID:                "openai/gpt-oss-120b",
+			Name:              "GPT-OSS 120B",
+			Description:       "Smarter rewrites; slower than the 20B",
+			Type:              LLM,
+			SupportsBatch:     true,
+			SupportsStreaming: false,
+			Local:             false,
+			AdapterType:       AdapterOpenAI,
+			Endpoint:          &EndpointConfig{BaseURL: "https://api.groq.com/openai", Path: "/v1/chat/completions"},
+		},
+		{
+			ID:                "qwen/qwen3.8-27b",
+			Name:              "Qwen3.8 27B",
+			Description:       "Strong multilingual cleanup",
 			Type:              LLM,
 			SupportsBatch:     true,
 			SupportsStreaming: false,
@@ -89,7 +101,7 @@ func (p *GroqProvider) DefaultModel(t ModelType) string {
 	case Transcription:
 		return "whisper-large-v3-turbo"
 	case LLM:
-		return "llama-3.3-70b-versatile"
+		return "openai/gpt-oss-20b"
 	}
 	return ""
 }

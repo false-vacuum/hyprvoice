@@ -131,8 +131,31 @@ Used for post-processing transcriptions (formatting, summarization, etc.)
 
 | Provider | Models | Quality | Cost |
 |----------|--------|---------|------|
+| **Groq** | gpt-oss-20b, gpt-oss-120b, qwen3.8-27b | Good-Excellent | Free tier |
+| **OpenRouter** | gemini-2.5-flash-lite, gpt-4o-mini, claude-haiku-4.5, llama-3.3-70b | Good-Excellent | Pay per token, one key |
 | **OpenAI** | gpt-4o, gpt-4o-mini | Excellent | Pay per token |
-| **Groq** | llama-3.3-70b, llama-3.1-8b, mixtral-8x7b | Good-Excellent | Free tier |
+| **openai-compatible** | Whatever your endpoint serves | Depends on model | Free when self-hosted |
+
+Post-processing only rewrites a sentence or two of dictated text, which any
+competent model does well. The result is typed out while you wait, so latency
+matters more than reasoning ability: prefer the fastest small model, and skip
+reasoning models entirely.
+
+### OpenRouter
+
+One API key and one bill in front of models from every vendor, which is its
+point here: you get Gemini, GPT, Claude and Llama without separate accounts.
+Set `provider = "openrouter"` and any model id from
+[openrouter.ai/models](https://openrouter.ai/models), including `:free`
+variants. Key: `OPENROUTER_API_KEY` or `providers.openrouter.api_key`.
+
+### openai-compatible (Bring Your Own Endpoint)
+
+Any service speaking the OpenAI chat completions API: Ollama, LM Studio,
+llama.cpp, vLLM, LiteLLM, or a company gateway. Set `provider =
+"openai-compatible"` plus `base_url` and `model`. An 8B instruct model running
+locally is ample for cleanup and keeps dictation off the network entirely. See
+[config.md](config.md#any-openai-compatible-endpoint) for the URLs.
 
 ---
 
@@ -168,6 +191,9 @@ Need complete privacy?
 | Ultra-low latency | ElevenLabs | scribe_v2_realtime (streaming) |
 | Offline/privacy | whisper-cpp | base.en or base |
 | High accuracy | OpenAI | gpt-4o-transcribe |
+| LLM cleanup (default) | Groq | openai/gpt-oss-20b |
+| LLM cleanup (many vendors) | OpenRouter | google/gemini-2.5-flash-lite |
+| LLM cleanup (offline) | openai-compatible | a local 8B instruct model |
 
 ---
 

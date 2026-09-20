@@ -64,6 +64,7 @@ func (c *Config) resolveAPIKeyForProvider(providerName string) string {
 func (c *Config) ToLLMConfig() LLMAdapterConfig {
 	config := LLMAdapterConfig{
 		Provider:          c.LLM.Provider,
+		BaseURL:           c.resolveLLMBaseURL(),
 		Model:             c.LLM.Model,
 		RemoveStutters:    c.LLM.PostProcessing.RemoveStutters,
 		AddPunctuation:    c.LLM.PostProcessing.AddPunctuation,
@@ -74,6 +75,9 @@ func (c *Config) ToLLMConfig() LLMAdapterConfig {
 
 	if c.LLM.Provider != "" {
 		config.APIKey = c.resolveAPIKeyForLLMProvider(c.LLM.Provider)
+		if p := provider.GetProvider(c.LLM.Provider); p != nil {
+			config.RequiresAPIKey = p.RequiresAPIKey()
+		}
 	}
 
 	if c.LLM.CustomPrompt.Enabled && c.LLM.CustomPrompt.Prompt != "" {
@@ -81,6 +85,16 @@ func (c *Config) ToLLMConfig() LLMAdapterConfig {
 	}
 
 	return config
+}
+
+// resolveLLMBaseURL returns the chat API root to talk to. An explicit
+// llm.base_url wins, so a known provider can be pointed at a proxy and the
+// custom provider has somewhere to get its URL at all.
+func (c *Config) resolveLLMBaseURL() string {
+	if c.LLM.BaseURL != "" {
+		return strings.TrimSuffix(c.LLM.BaseURL, "/")
+	}
+	return provider.ChatBaseURL(c.LLM.Provider)
 }
 
 // resolveAPIKeyForLLMProvider returns the API key for an LLM provider
@@ -102,7 +116,7 @@ func (c *Config) resolveAPIKeyForLLMProvider(providerName string) string {
 
 // IsLLMEnabled returns true if LLM post-processing is enabled and configured
 func (c *Config) IsLLMEnabled() bool {
-	return c.LLM.Enabled && c.LLM.Provider != "" && c.LLM.Model != ""
+	return c.LLM.Enabled && c.LLM.Provider != "" && c.LLM.Model != "" && c.resolveLLMBaseURL() != ""
 }
 
 func (c *Config) ToInjectionConfig() injection.Config {

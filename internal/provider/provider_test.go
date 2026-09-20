@@ -16,7 +16,7 @@ func TestProviderInterface(t *testing.T) {
 		defaultLLMModel   string
 	}{
 		{"openai", true, true, false, "whisper-1", "gpt-4o-mini"},
-		{"groq", true, true, false, "whisper-large-v3-turbo", "llama-3.3-70b-versatile"},
+		{"groq", true, true, false, "whisper-large-v3-turbo", "openai/gpt-oss-20b"},
 		{"mistral", true, false, false, "voxtral-mini-latest", ""},
 		{"elevenlabs", true, false, false, "scribe_v1", ""},
 	}
@@ -400,6 +400,65 @@ func TestElevenLabsProvider(t *testing.T) {
 	for _, m := range models {
 		if len(m.SupportedLanguages) != wantLangCount {
 			t.Errorf("model %q has %d languages, want %d", m.ID, len(m.SupportedLanguages), wantLangCount)
+		}
+	}
+}
+
+func TestChatBaseURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		expected string
+	}{
+		{
+			name:     "openai drops the chat completions suffix",
+			provider: ProviderOpenAI,
+			expected: "https://api.openai.com/v1",
+		},
+		{
+			name:     "groq keeps its openai path segment",
+			provider: ProviderGroq,
+			expected: "https://api.groq.com/openai/v1",
+		},
+		{
+			name:     "openrouter keeps its api path segment",
+			provider: ProviderOpenRouter,
+			expected: "https://openrouter.ai/api/v1",
+		},
+		{
+			name:     "empty for the custom endpoint",
+			provider: ProviderCustom,
+			expected: "",
+		},
+		{
+			name:     "empty for a transcription-only provider",
+			provider: ProviderDeepgram,
+			expected: "",
+		},
+		{
+			name:     "empty for an unknown provider",
+			provider: "nope",
+			expected: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := ChatBaseURL(tc.provider)
+
+			if result != tc.expected {
+				t.Errorf("expected %q, got %q", tc.expected, result)
+			}
+		})
+	}
+}
+
+func TestListProvidersWithLLMIncludesCustom(t *testing.T) {
+	names := ListProvidersWithLLM()
+
+	for _, want := range []string{ProviderOpenAI, ProviderGroq, ProviderOpenRouter, ProviderCustom} {
+		if !slices.Contains(names, want) {
+			t.Errorf("expected %q in LLM providers, got %v", want, names)
 		}
 	}
 }

@@ -1486,7 +1486,7 @@ func TestConfig_LLMValidation(t *testing.T) {
 		config := baseConfig()
 		config.LLM.Enabled = true
 		config.LLM.Provider = "groq"
-		config.LLM.Model = "llama-3.3-70b-versatile"
+		config.LLM.Model = "openai/gpt-oss-20b"
 		// No groq API key in providers
 
 		// Clear env var
@@ -1538,7 +1538,7 @@ model = "whisper-1"
 [llm]
 enabled = true
 provider = "groq"
-model = "llama-3.3-70b-versatile"
+model = "openai/gpt-oss-20b"
 
 [llm.post_processing]
 remove_stutters = true

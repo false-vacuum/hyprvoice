@@ -88,6 +88,9 @@ func Save(cfg *Config) error {
 	if cfg.LLM.Model != "" {
 		sb.WriteString(fmt.Sprintf("  model = %q\n", cfg.LLM.Model))
 	}
+	if cfg.LLM.BaseURL != "" {
+		sb.WriteString(fmt.Sprintf("  base_url = %q\n", cfg.LLM.BaseURL))
+	}
 	sb.WriteString("\n")
 
 	sb.WriteString("  [llm.post_processing]\n")
@@ -267,7 +270,7 @@ keywords = []
 [llm]
   enabled = true               # Enable LLM post-processing (highly recommended)
   provider = "openai"          # "openai" or "groq" (must have API key configured above)
-  model = "gpt-4o-mini"        # OpenAI: "gpt-4o-mini", Groq: "llama-3.3-70b-versatile"
+  model = "gpt-4o-mini"        # OpenAI: "gpt-4o-mini", Groq: "openai/gpt-oss-20b"
 
 [llm.post_processing]
   remove_stutters = true       # Remove "um", "uh", repeated words
@@ -357,7 +360,7 @@ keywords = []
 #
 # LLM providers (for post-processing):
 # - "openai": GPT models (gpt-4o-mini recommended for cost/quality balance)
-# - "groq": Fast inference (llama-3.3-70b-versatile recommended)
+# - "groq": Fast inference (openai/gpt-oss-20b recommended)
 #
 # Injection backends:
 # - "ydotool": Uses ydotool (requires ydotoold daemon). Best for Chromium/Electron apps.

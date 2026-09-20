@@ -30,9 +30,14 @@ type ProviderConfig struct {
 
 // LLMConfig configures the LLM post-processing phase
 type LLMConfig struct {
-	Enabled        bool                    `toml:"enabled"`
-	Provider       string                  `toml:"provider"`
-	Model          string                  `toml:"model"`
+	Enabled  bool   `toml:"enabled"`
+	Provider string `toml:"provider"`
+	Model    string `toml:"model"`
+	// BaseURL is required when Provider is "openai-compatible" and points at
+	// an OpenAI-style API root, ending at the version segment
+	// (e.g. "http://localhost:11434/v1"). For a known provider it overrides
+	// the built-in URL, which is how a proxy or a regional endpoint is used.
+	BaseURL        string                  `toml:"base_url"`
 	PostProcessing LLMPostProcessingConfig `toml:"post_processing"`
 	CustomPrompt   LLMCustomPromptConfig   `toml:"custom_prompt"`
 }
@@ -153,7 +158,9 @@ func (m *MessagesConfig) Resolve() map[notify.MessageType]notify.Message {
 // LLMAdapterConfig is the configuration passed to the LLM adapter
 type LLMAdapterConfig struct {
 	Provider          string
+	BaseURL           string
 	APIKey            string
+	RequiresAPIKey    bool
 	Model             string
 	RemoveStutters    bool
 	AddPunctuation    bool

@@ -11,7 +11,9 @@ import (
 )
 
 // AllProviders is the list of all supported cloud providers (require API keys).
-var AllProviders = []string{"openai", "groq", "mistral", "elevenlabs", "deepgram"}
+// OpenRouter is included although it serves no transcription models, so its
+// key can be set here rather than only inside the LLM flow.
+var AllProviders = []string{"openai", "groq", "mistral", "elevenlabs", "deepgram", "openrouter"}
 
 // LocalProviders is the list of local providers (no API key required).
 var LocalProviders = []string{"whisper-cpp"}
@@ -24,6 +26,9 @@ var providerDisplayNames = map[string]string{
 	"elevenlabs":  "ElevenLabs",
 	"deepgram":    "Deepgram",
 	"whisper-cpp": "Whisper.cpp (local)",
+
+	"openrouter":        "OpenRouter",
+	"openai-compatible": "Custom endpoint",
 }
 
 func getProviderDisplayName(providerName string) string {

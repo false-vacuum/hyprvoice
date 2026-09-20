@@ -63,3 +63,79 @@ func BuildUserPrompt(text string, customPrompt string) string {
 	}
 	return text
 }
+
+// A preamble line is recognized by two parts together: an announcing phrase
+// and a word naming the thing being handed over. Either alone is too common in
+// real dictation ("Here is the thing:", "Shopping list:") to strip safely.
+var (
+	preambleLeadIns = []string{"here is", "here's", "sure", "certainly", "of course", "cleaned", "corrected", "revised"}
+	preambleNouns   = []string{"text", "version", "transcript", "transcription", "output", "result"}
+)
+
+// maxPreambleLength caps how long a line can be and still be a lead-in. A
+// genuine one is a few words; anything longer is dictation that happens to
+// match.
+const maxPreambleLength = 80
+
+// StripPreamble removes a conversational first line such as "Sure, here's the
+// cleaned-up text:" and any surrounding code fence. Smaller and non-OpenAI
+// models add these despite the prompt forbidding them, and the text is typed
+// straight into the focused window, so a stray lead-in is visible damage.
+func StripPreamble(text string) string {
+	out := strings.TrimSpace(text)
+	out = stripCodeFence(out)
+
+	line, rest, found := strings.Cut(out, "\n")
+	if !found {
+		return out
+	}
+	if !isPreambleLine(line) {
+		return out
+	}
+	return stripCodeFence(strings.TrimSpace(rest))
+}
+
+// isPreambleLine reports whether a line announces the output rather than being
+// part of it.
+func isPreambleLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasSuffix(trimmed, ":") || len(trimmed) > maxPreambleLength {
+		return false
+	}
+
+	lower := strings.ToLower(trimmed)
+	if lower == "output:" {
+		return true
+	}
+
+	hasLeadIn := false
+	for _, leadIn := range preambleLeadIns {
+		if strings.Contains(lower, leadIn) {
+			hasLeadIn = true
+			break
+		}
+	}
+	if !hasLeadIn {
+		return false
+	}
+
+	for _, noun := range preambleNouns {
+		if strings.Contains(lower, noun) {
+			return true
+		}
+	}
+	return false
+}
+
+// stripCodeFence unwraps a response the model wrapped in triple backticks.
+func stripCodeFence(text string) string {
+	if !strings.HasPrefix(text, "```") || !strings.HasSuffix(text, "```") {
+		return text
+	}
+	inner := strings.TrimSuffix(text, "```")
+	// Drop the opening fence along with any language tag on the same line.
+	if _, rest, found := strings.Cut(inner, "\n"); found {
+		inner = rest
+	}
+	return strings.TrimSpace(inner)
+}

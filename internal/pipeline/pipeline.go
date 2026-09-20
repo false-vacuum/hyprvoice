@@ -465,7 +465,9 @@ func (p *pipeline) handleInjectAction(ctx context.Context, recorder recording.Re
 		llmCfg := p.config.ToLLMConfig()
 		adapter, err := p.llmAdapterFactory(llm.Config{
 			Provider:          llmCfg.Provider,
+			BaseURL:           llmCfg.BaseURL,
 			APIKey:            llmCfg.APIKey,
+			RequiresAPIKey:    llmCfg.RequiresAPIKey,
 			Model:             llmCfg.Model,
 			RemoveStutters:    llmCfg.RemoveStutters,
 			AddPunctuation:    llmCfg.AddPunctuation,

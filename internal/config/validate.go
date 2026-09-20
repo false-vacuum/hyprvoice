@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/leonardotrapani/hyprvoice/internal/injection"
@@ -120,23 +122,25 @@ func (c *Config) Validate() error {
 		llmProvider := provider.GetProvider(c.LLM.Provider)
 		if llmProvider == nil {
 			providers := provider.ListProvidersWithLLM()
+			sort.Strings(providers)
 			return fmt.Errorf("invalid llm.provider: %s (available: %s)", c.LLM.Provider, strings.Join(providers, ", "))
 		}
 
-		// validate LLM model exists
-		llmModel, err := provider.GetModel(c.LLM.Provider, c.LLM.Model)
-		if err != nil {
-			models := provider.ModelsOfType(llmProvider, provider.LLM)
-			modelIDs := make([]string, len(models))
-			for i, m := range models {
-				modelIDs[i] = m.ID
-			}
-			return fmt.Errorf("invalid llm.model: %s (available for %s: %s)", c.LLM.Model, c.LLM.Provider, strings.Join(modelIDs, ", "))
+		if err := ValidateLLMBaseURL(c.LLM.Provider, c.LLM.BaseURL); err != nil {
+			return err
 		}
 
-		// verify model is actually an LLM
-		if llmModel.Type != provider.LLM {
-			return fmt.Errorf("invalid llm.model: %s is not an LLM model", c.LLM.Model)
+		// An id the registry does not know is not fatal: providers retire and
+		// add models faster than this list is updated, and refusing to load
+		// would strand a config whose model is perfectly valid upstream. Let
+		// the request fail instead, where the provider's own error says why.
+		// A known id pointing at a transcription model is still a config bug.
+		if !provider.IsCustom(c.LLM.Provider) {
+			if llmModel, err := provider.GetModel(c.LLM.Provider, c.LLM.Model); err == nil {
+				if llmModel.Type != provider.LLM {
+					return fmt.Errorf("invalid llm.model: %s is not an LLM model", c.LLM.Model)
+				}
+			}
 		}
 
 		// validate LLM API key
@@ -261,4 +265,33 @@ func validateSelection(selection string) error {
 	default:
 		return fmt.Errorf("%q (must be clipboard or primary)", selection)
 	}
+}
+
+// ValidateLLMBaseURL checks llm.base_url. The custom provider has no built-in
+// URL so one must be supplied; for the others it is an optional override, and
+// either way an unusable URL should fail at config load rather than mid-dictation.
+func ValidateLLMBaseURL(providerName, baseURL string) error {
+	if baseURL == "" {
+		if provider.IsCustom(providerName) {
+			return fmt.Errorf("llm.base_url required when llm.provider = %q (e.g. \"http://localhost:11434/v1\")", providerName)
+		}
+		return nil
+	}
+
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return fmt.Errorf("invalid llm.base_url: %s (%w)", baseURL, err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("invalid llm.base_url: %s (must start with http:// or https://)", baseURL)
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("invalid llm.base_url: %s (missing host)", baseURL)
+	}
+	// The client appends "/chat/completions", so a URL carrying it already
+	// would request ".../chat/completions/chat/completions".
+	if strings.Contains(parsed.Path, "/chat/completions") {
+		return fmt.Errorf("invalid llm.base_url: %s (drop the /chat/completions suffix, it is added automatically)", baseURL)
+	}
+	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/leonardotrapani/hyprvoice/internal/injection"
+	"github.com/leonardotrapani/hyprvoice/internal/provider"
 )
 
 // validTestConfig is a config that passes Validate, so each test can change
@@ -216,5 +217,116 @@ func TestLoad_KeepsRestoreClipboardOffWhenSetExplicitly(t *testing.T) {
 
 	if cfg.Injection.Paste.RestoreClipboard {
 		t.Error("an explicit restore_clipboard = false was overridden")
+	}
+}
+
+func TestValidateLLMBaseURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		baseURL  string
+		wantErr  bool
+	}{
+		{
+			name:     "custom provider requires a URL",
+			provider: provider.ProviderCustom,
+			baseURL:  "",
+			wantErr:  true,
+		},
+		{
+			name:     "custom provider accepts a local URL",
+			provider: provider.ProviderCustom,
+			baseURL:  "http://localhost:11434/v1",
+			wantErr:  false,
+		},
+		{
+			name:     "known provider needs no URL",
+			provider: provider.ProviderGroq,
+			baseURL:  "",
+			wantErr:  false,
+		},
+		{
+			name:     "known provider accepts an override",
+			provider: provider.ProviderGroq,
+			baseURL:  "https://proxy.internal/openai/v1",
+			wantErr:  false,
+		},
+		{
+			name:     "rejects a missing scheme",
+			provider: provider.ProviderCustom,
+			baseURL:  "localhost:11434/v1",
+			wantErr:  true,
+		},
+		{
+			name:     "rejects a missing host",
+			provider: provider.ProviderCustom,
+			baseURL:  "http:///v1",
+			wantErr:  true,
+		},
+		{
+			name:     "rejects a URL carrying the chat completions path",
+			provider: provider.ProviderCustom,
+			baseURL:  "http://localhost:11434/v1/chat/completions",
+			wantErr:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateLLMBaseURL(tc.provider, tc.baseURL)
+
+			if tc.wantErr && err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestResolveLLMBaseURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		llm      LLMConfig
+		expected string
+	}{
+		{
+			name:     "uses the registry URL for a known provider",
+			llm:      LLMConfig{Provider: provider.ProviderGroq},
+			expected: "https://api.groq.com/openai/v1",
+		},
+		{
+			name:     "uses the registry URL for openrouter",
+			llm:      LLMConfig{Provider: provider.ProviderOpenRouter},
+			expected: "https://openrouter.ai/api/v1",
+		},
+		{
+			name:     "an explicit base URL overrides the registry",
+			llm:      LLMConfig{Provider: provider.ProviderGroq, BaseURL: "https://proxy.internal/v1"},
+			expected: "https://proxy.internal/v1",
+		},
+		{
+			name:     "trims a trailing slash",
+			llm:      LLMConfig{Provider: provider.ProviderCustom, BaseURL: "http://localhost:11434/v1/"},
+			expected: "http://localhost:11434/v1",
+		},
+		{
+			name:     "empty for a custom provider with no URL",
+			llm:      LLMConfig{Provider: provider.ProviderCustom},
+			expected: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{LLM: tc.llm}
+
+			result := cfg.resolveLLMBaseURL()
+
+			if result != tc.expected {
+				t.Errorf("expected %q, got %q", tc.expected, result)
+			}
+		})
 	}
 }

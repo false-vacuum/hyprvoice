@@ -31,6 +31,8 @@ func init() {
 	Register(&ElevenLabsProvider{})
 	Register(&WhisperCppProvider{})
 	Register(&DeepgramProvider{})
+	Register(&OpenRouterProvider{})
+	Register(&CustomProvider{})
 }
 
 // Register adds a provider to the registry
@@ -63,11 +65,13 @@ func ListProvidersWithTranscription() []string {
 	return names
 }
 
-// ListProvidersWithLLM returns providers that support LLM
+// ListProvidersWithLLM returns providers that support LLM. The custom
+// endpoint is included despite an empty model list: its models are whatever
+// the configured server serves.
 func ListProvidersWithLLM() []string {
 	var names []string
 	for name, p := range registry {
-		if hasModelsOfType(p, LLM) {
+		if hasModelsOfType(p, LLM) || IsCustom(name) {
 			names = append(names, name)
 		}
 	}
@@ -177,6 +181,27 @@ func ValidateModelLanguage(providerName, modelID, langCode string) error {
 		strings.Join(supported, ", "),
 		suffix,
 	)
+}
+
+// chatCompletionsPath is the path OpenAI-style clients append themselves, so
+// ChatBaseURL trims it back off the endpoint metadata.
+const chatCompletionsPath = "/chat/completions"
+
+// ChatBaseURL returns a provider's OpenAI-style chat API root, ending at the
+// version segment (e.g. "https://api.groq.com/openai/v1"). Empty for providers
+// with no LLM models, and for the custom endpoint, whose URL comes from config.
+func ChatBaseURL(providerName string) string {
+	p := GetProvider(providerName)
+	if p == nil {
+		return ""
+	}
+	for _, m := range p.Models() {
+		if m.Type != LLM || m.Endpoint == nil {
+			continue
+		}
+		return strings.TrimSuffix(m.Endpoint.BaseURL+m.Endpoint.Path, chatCompletionsPath)
+	}
+	return ""
 }
 
 var (
