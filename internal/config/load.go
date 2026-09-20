@@ -70,6 +70,7 @@ func LoadOrLegacy() (*Config, bool, error) {
 
 	config.applyLLMDefaults()
 	config.applyThreadsDefault()
+	config.applyPasteDefaults(meta)
 
 	log.Printf("Config: configuration loaded successfully")
 	return &config, false, nil
@@ -110,5 +111,28 @@ func (c *Config) applyLLMDefaults() {
 		pp.AddPunctuation = true
 		pp.FixGrammar = true
 		pp.RemoveFillerWords = true
+	}
+}
+
+// applyPasteDefaults fills in paste settings the config file leaves out, so a
+// file written before this backend existed only needs "paste" added to
+// backends rather than a whole section copied in.
+func (c *Config) applyPasteDefaults(meta toml.MetaData) {
+	if c.Injection.PasteTimeout <= 0 {
+		c.Injection.PasteTimeout = DefaultPasteTimeout
+	}
+	if c.Injection.Paste.Key == "" {
+		c.Injection.Paste.Key = DefaultPasteKey
+	}
+	if c.Injection.Paste.Selection == "" {
+		c.Injection.Paste.Selection = DefaultPasteSelection
+	}
+	if len(c.Injection.Paste.Apps) == 0 {
+		c.Injection.Paste.Apps = DefaultPasteApps()
+	}
+	// A bool cannot say "unset", so the file is asked directly; otherwise
+	// every config without the section would opt out of restoring.
+	if !meta.IsDefined("injection", "paste", "restore_clipboard") {
+		c.Injection.Paste.RestoreClipboard = true
 	}
 }

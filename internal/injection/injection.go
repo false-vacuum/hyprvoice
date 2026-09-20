@@ -12,10 +12,12 @@ type Injector interface {
 }
 
 type Config struct {
-	Backends         []string      // Ordered list: "ydotool", "wtype", "clipboard"
+	Backends         []string      // Ordered list: "paste", "ydotool", "wtype", "clipboard"
 	YdotoolTimeout   time.Duration // Timeout for ydotool commands
 	WtypeTimeout     time.Duration // Timeout for wtype commands
 	ClipboardTimeout time.Duration // Timeout for clipboard operations
+	PasteTimeout     time.Duration // Timeout for a copy-and-paste round
+	Paste            PasteConfig   // How the paste backend pastes
 }
 
 type injector struct {
@@ -34,6 +36,8 @@ func NewInjector(config Config) Injector {
 			backends = append(backends, NewWtypeBackend())
 		case "clipboard":
 			backends = append(backends, NewClipboardBackend())
+		case "paste":
+			backends = append(backends, NewPasteBackend(config.Paste))
 		default:
 			log.Printf("Injection: unknown backend %q, skipping", name)
 		}

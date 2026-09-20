@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 
 	"github.com/leonardotrapani/hyprvoice/internal/injection"
 	"github.com/leonardotrapani/hyprvoice/internal/provider"
@@ -110,5 +111,30 @@ func (c *Config) ToInjectionConfig() injection.Config {
 		YdotoolTimeout:   c.Injection.YdotoolTimeout,
 		WtypeTimeout:     c.Injection.WtypeTimeout,
 		ClipboardTimeout: c.Injection.ClipboardTimeout,
+		PasteTimeout:     c.Injection.PasteTimeout,
+		Paste: injection.PasteConfig{
+			Default: injection.PasteApp{
+				Key:       c.Injection.Paste.Key,
+				Selection: c.Injection.Paste.Selection,
+			},
+			Apps:             pasteApps(c.Injection.Paste.Apps),
+			RestoreClipboard: c.Injection.Paste.RestoreClipboard,
+		},
 	}
+}
+
+// pasteApps normalises app ids so a config entry matches whatever case the
+// compositor reports.
+func pasteApps(apps map[string]PasteAppConfig) map[string]injection.PasteApp {
+	if apps == nil {
+		return nil
+	}
+	out := make(map[string]injection.PasteApp, len(apps))
+	for app, entry := range apps {
+		out[strings.ToLower(app)] = injection.PasteApp{
+			Key:       entry.Key,
+			Selection: entry.Selection,
+		}
+	}
+	return out
 }

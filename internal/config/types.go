@@ -74,6 +74,28 @@ type InjectionConfig struct {
 	YdotoolTimeout   time.Duration `toml:"ydotool_timeout"`
 	WtypeTimeout     time.Duration `toml:"wtype_timeout"`
 	ClipboardTimeout time.Duration `toml:"clipboard_timeout"`
+	PasteTimeout     time.Duration `toml:"paste_timeout"`
+	Paste            PasteConfig   `toml:"paste"`
+}
+
+type PasteConfig struct {
+	// Key is sent when the focused app is unknown or has no entry in Apps.
+	Key string `toml:"key"`
+	// Selection is which buffer the default pastes from: "clipboard" or
+	// "primary". Primary is invisible to clipboard managers, but only
+	// terminals tend to offer a key for it.
+	Selection string `toml:"selection"`
+	// Apps maps an app id to how that app pastes. No single answer is right
+	// everywhere: terminals mostly use ctrl+shift+v, or shift+Insert from the
+	// primary selection, while the rest of the desktop uses ctrl+v.
+	Apps map[string]PasteAppConfig `toml:"apps"`
+	// RestoreClipboard puts the previous clipboard contents back afterwards.
+	RestoreClipboard bool `toml:"restore_clipboard"`
+}
+
+type PasteAppConfig struct {
+	Key       string `toml:"key"`
+	Selection string `toml:"selection"`
 }
 
 type NotificationsConfig struct {

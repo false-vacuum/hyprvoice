@@ -2,8 +2,10 @@ package config
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
+	"github.com/leonardotrapani/hyprvoice/internal/injection"
 	"github.com/leonardotrapani/hyprvoice/internal/provider"
 )
 
@@ -151,10 +153,10 @@ func (c *Config) Validate() error {
 	if len(c.Injection.Backends) == 0 {
 		return fmt.Errorf("invalid injection.backends: empty (must have at least one backend)")
 	}
-	validBackends := map[string]bool{"ydotool": true, "wtype": true, "clipboard": true}
+	validBackends := map[string]bool{"ydotool": true, "wtype": true, "clipboard": true, "paste": true}
 	for _, backend := range c.Injection.Backends {
 		if !validBackends[backend] {
-			return fmt.Errorf("invalid injection.backends: unknown backend %q (must be ydotool, wtype, or clipboard)", backend)
+			return fmt.Errorf("invalid injection.backends: unknown backend %q (must be paste, ydotool, wtype, or clipboard)", backend)
 		}
 	}
 	if c.Injection.YdotoolTimeout <= 0 {
@@ -165,6 +167,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Injection.ClipboardTimeout <= 0 {
 		return fmt.Errorf("invalid injection.clipboard_timeout: %v", c.Injection.ClipboardTimeout)
+	}
+	if err := validatePaste(c.Injection); err != nil {
+		return err
 	}
 
 	validTypes := map[string]bool{"desktop": true, "overlay": true, "log": true, "none": true}
@@ -220,4 +225,40 @@ func ValidateModelLanguageCompatibility(registryProvider, modelID, langCode stri
 		strings.Join(supported, ", "),
 		suffix,
 	)
+}
+
+// validatePaste checks the paste backend's settings, and only when it is
+// actually in the chain: an unused section is not worth failing a load over.
+func validatePaste(cfg InjectionConfig) error {
+	if !slices.Contains(cfg.Backends, "paste") {
+		return nil
+	}
+
+	if cfg.PasteTimeout <= 0 {
+		return fmt.Errorf("invalid injection.paste_timeout: %v", cfg.PasteTimeout)
+	}
+	if err := injection.ValidatePasteKey(cfg.Paste.Key); err != nil {
+		return fmt.Errorf("invalid injection.paste.key: %w", err)
+	}
+	if err := validateSelection(cfg.Paste.Selection); err != nil {
+		return fmt.Errorf("invalid injection.paste.selection: %w", err)
+	}
+	for app, entry := range cfg.Paste.Apps {
+		if err := injection.ValidatePasteKey(entry.Key); err != nil {
+			return fmt.Errorf("invalid injection.paste.apps.%s.key: %w", app, err)
+		}
+		if err := validateSelection(entry.Selection); err != nil {
+			return fmt.Errorf("invalid injection.paste.apps.%s.selection: %w", app, err)
+		}
+	}
+	return nil
+}
+
+func validateSelection(selection string) error {
+	switch selection {
+	case "", "clipboard", injection.SelectionPrimary:
+		return nil
+	default:
+		return fmt.Errorf("%q (must be clipboard or primary)", selection)
+	}
 }

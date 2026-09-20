@@ -1,6 +1,6 @@
 # Maintainer: Jake Greene <jacobgreene1991@gmail.com>
 pkgname=hyprvoice-git
-pkgver=1.0.2.r22.g64d851c
+pkgver=1.0.2.r16.g58d641a
 pkgrel=1
 pkgdesc="Voice-powered typing for Wayland/Hyprland (fork of the archived leonardotrapani/hyprvoice)"
 arch=('x86_64')

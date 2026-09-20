@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 )
 
@@ -117,6 +119,17 @@ func Save(cfg *Config) error {
 	sb.WriteString(fmt.Sprintf("  ydotool_timeout = %q\n", cfg.Injection.YdotoolTimeout.String()))
 	sb.WriteString(fmt.Sprintf("  wtype_timeout = %q\n", cfg.Injection.WtypeTimeout.String()))
 	sb.WriteString(fmt.Sprintf("  clipboard_timeout = %q\n", cfg.Injection.ClipboardTimeout.String()))
+	sb.WriteString(fmt.Sprintf("  paste_timeout = %q\n", cfg.Injection.PasteTimeout.String()))
+	sb.WriteString("\n  [injection.paste]\n")
+	sb.WriteString(fmt.Sprintf("    key = %q\n", cfg.Injection.Paste.Key))
+	sb.WriteString(fmt.Sprintf("    selection = %q\n", cfg.Injection.Paste.Selection))
+	sb.WriteString(fmt.Sprintf("    restore_clipboard = %t\n", cfg.Injection.Paste.RestoreClipboard))
+	for _, app := range slices.Sorted(maps.Keys(cfg.Injection.Paste.Apps)) {
+		entry := cfg.Injection.Paste.Apps[app]
+		sb.WriteString(fmt.Sprintf("\n    [injection.paste.apps.%q]\n", app))
+		sb.WriteString(fmt.Sprintf("      key = %q\n", entry.Key))
+		sb.WriteString(fmt.Sprintf("      selection = %q\n", entry.Selection))
+	}
 	sb.WriteString("\n")
 
 	// Notifications
@@ -276,6 +289,25 @@ keywords = []
   ydotool_timeout = "5s"       # Timeout for ydotool commands
   wtype_timeout = "5s"         # Timeout for wtype commands
   clipboard_timeout = "3s"     # Timeout for clipboard operations
+  paste_timeout = "3s"         # Timeout for a copy-and-paste round
+
+  # Only used when "paste" is in backends.
+  [injection.paste]
+    key = "ctrl+v"             # Sent when the focused app is not listed below
+    selection = "clipboard"    # "clipboard" or "primary"
+    restore_clipboard = true   # Put the previous clipboard contents back afterwards
+
+    # Apps that do not paste with ctrl+v, keyed by the app id the compositor
+    # reports. Terminals moved paste to ctrl+shift+v because ctrl+c interrupts.
+    # selection = "primary" uses the mouse-selection buffer, which clipboard
+    # managers generally do not record, so the text leaves no history entry.
+    [injection.paste.apps."kitty"]
+      key = "shift+Insert"
+      selection = "primary"
+
+    [injection.paste.apps."alacritty"]
+      key = "ctrl+shift+v"
+      selection = "clipboard"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Notifications
@@ -331,6 +363,9 @@ keywords = []
 # - "ydotool": Uses ydotool (requires ydotoold daemon). Best for Chromium/Electron apps.
 # - "wtype": Uses wtype for Wayland. May have issues with some Chromium apps.
 # - "clipboard": Copies to clipboard only (most reliable, requires manual paste).
+# - "paste": Copies, then sends the focused app's paste key. Lands all at once
+#   rather than one character at a time, so a long dictation cannot be broken
+#   up by whatever you type next. Needs wl-clipboard and wtype.
 #
 # Language codes: "" (auto-detect), "en", "it", "es", "fr", "de", "pt", etc.
 # Language is configured per transcription model - only supported languages are shown during setup.
