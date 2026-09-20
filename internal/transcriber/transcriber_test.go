@@ -1048,3 +1048,211 @@ func TestNewTranscriber_MultilingualModelAllLanguages(t *testing.T) {
 		t.Errorf("NewTranscriber() returned nil transcriber")
 	}
 }
+
+func TestStreamingTranscriber_PartialsReplaceDraft(t *testing.T) {
+	// Arrange
+	adapter := NewMockStreamingAdapter()
+	transcriber := NewStreamingTranscriber(adapter, "en")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	frameCh := make(chan recording.AudioFrame, 10)
+	if _, err := transcriber.Start(ctx, frameCh); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer func() {
+		close(frameCh)
+		_ = transcriber.Stop(ctx)
+	}()
+
+	// Act
+	adapter.SendResult(TranscriptionResult{Text: "hel", IsFinal: false})
+	adapter.SendResult(TranscriptionResult{Text: "hello wor", IsFinal: false})
+
+	// Assert
+	want := []TranscriptUpdate{
+		{Final: "", Draft: "hel"},
+		{Final: "", Draft: "hello wor"},
+	}
+	assertPartials(t, transcriber.Partials(), want)
+}
+
+func TestStreamingTranscriber_PartialsClearDraftOnFinal(t *testing.T) {
+	// Arrange
+	adapter := NewMockStreamingAdapter()
+	transcriber := NewStreamingTranscriber(adapter, "en")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	frameCh := make(chan recording.AudioFrame, 10)
+	if _, err := transcriber.Start(ctx, frameCh); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer func() {
+		close(frameCh)
+		_ = transcriber.Stop(ctx)
+	}()
+
+	// Act
+	adapter.SendResult(TranscriptionResult{Text: "hello wor", IsFinal: false})
+	adapter.SendResult(TranscriptionResult{Text: "hello world", IsFinal: true})
+	adapter.SendResult(TranscriptionResult{Text: "how", IsFinal: false})
+
+	// Assert
+	want := []TranscriptUpdate{
+		{Final: "", Draft: "hello wor"},
+		{Final: "hello world", Draft: ""},
+		{Final: "hello world", Draft: "how"},
+	}
+	assertPartials(t, transcriber.Partials(), want)
+}
+
+func TestStreamingTranscriber_PartialsAccumulateFinals(t *testing.T) {
+	// Arrange
+	adapter := NewMockStreamingAdapter()
+	transcriber := NewStreamingTranscriber(adapter, "en")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	frameCh := make(chan recording.AudioFrame, 10)
+	if _, err := transcriber.Start(ctx, frameCh); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer func() {
+		close(frameCh)
+		_ = transcriber.Stop(ctx)
+	}()
+
+	// Act
+	adapter.SendResult(TranscriptionResult{Text: "hello", IsFinal: true})
+	adapter.SendResult(TranscriptionResult{Text: "world", IsFinal: true})
+
+	// Assert
+	want := []TranscriptUpdate{
+		{Final: "hello", Draft: ""},
+		{Final: "hello world", Draft: ""},
+	}
+	assertPartials(t, transcriber.Partials(), want)
+}
+
+func TestStreamingTranscriber_PartialsIgnoreEmptyResults(t *testing.T) {
+	// Arrange
+	adapter := NewMockStreamingAdapter()
+	transcriber := NewStreamingTranscriber(adapter, "en")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	frameCh := make(chan recording.AudioFrame, 10)
+	if _, err := transcriber.Start(ctx, frameCh); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer func() {
+		close(frameCh)
+		_ = transcriber.Stop(ctx)
+	}()
+
+	// Act
+	adapter.SendResult(TranscriptionResult{Text: "", IsFinal: false})
+	adapter.SendResult(TranscriptionResult{Text: "", IsFinal: true})
+	adapter.SendResult(TranscriptionResult{Text: "hello", IsFinal: false})
+
+	// Assert: the blank results leave no trace, so only the real one arrives
+	assertPartials(t, transcriber.Partials(), []TranscriptUpdate{{Final: "", Draft: "hello"}})
+}
+
+// Nothing is obliged to read partials, and transcription must not wait on one
+// that does not.
+func TestStreamingTranscriber_PartialsDoNotBlockUnreadConsumer(t *testing.T) {
+	// Arrange
+	adapter := NewMockStreamingAdapter()
+	transcriber := NewStreamingTranscriber(adapter, "en")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	frameCh := make(chan recording.AudioFrame, 10)
+	if _, err := transcriber.Start(ctx, frameCh); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer func() {
+		close(frameCh)
+		_ = transcriber.Stop(ctx)
+	}()
+
+	// Act: far more results than the partial buffer holds, never read
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < partialBuffer*4; i++ {
+			adapter.SendResult(TranscriptionResult{Text: fmt.Sprintf("word %d", i), IsFinal: true})
+		}
+	}()
+
+	// Assert
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("transcription stalled on a partial consumer that stopped reading")
+	}
+
+	// the transcript itself is unaffected by the dropped snapshots
+	waitFor(t, func() bool {
+		text, err := transcriber.GetFinalTranscription()
+		return err == nil && strings.Contains(text, fmt.Sprintf("word %d", partialBuffer*4-1))
+	})
+}
+
+func TestSimpleTranscriber_ReportsNoPartials(t *testing.T) {
+	// Arrange
+	adapter := &MockBatchAdapter{}
+
+	// Act
+	var transcriber Transcriber = NewSimpleTranscriber(Config{Provider: "openai"}, adapter)
+	_, ok := transcriber.(PartialTranscriber)
+
+	// Assert: batch transcribers see the audio only once recording stops
+	if ok {
+		t.Error("SimpleTranscriber implements PartialTranscriber, want batch transcribers to report no partials")
+	}
+}
+
+// assertPartials reads exactly len(want) snapshots and checks them in order,
+// then checks that nothing further is pending.
+func assertPartials(t *testing.T, partials <-chan TranscriptUpdate, want []TranscriptUpdate) {
+	t.Helper()
+
+	for i, wantUpdate := range want {
+		select {
+		case got := <-partials:
+			if got != wantUpdate {
+				t.Fatalf("partial %d = %+v, want %+v", i, got, wantUpdate)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("partial %d never arrived, want %+v", i, wantUpdate)
+		}
+	}
+
+	select {
+	case extra := <-partials:
+		t.Fatalf("unexpected extra partial %+v", extra)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// waitFor polls until cond holds or the test gives up.
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("condition never became true")
+}

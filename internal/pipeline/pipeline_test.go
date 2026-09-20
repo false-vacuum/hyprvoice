@@ -7,6 +7,7 @@ import (
 
 	"github.com/leonardotrapani/hyprvoice/internal/config"
 	"github.com/leonardotrapani/hyprvoice/internal/testutil"
+	"github.com/leonardotrapani/hyprvoice/internal/transcriber"
 )
 
 func TestNew(t *testing.T) {
@@ -511,11 +512,12 @@ func TestPipeline_WithMocks_LLMProcessing(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// verify LLM was called with transcription
-	if !mockLLM.ProcessCalled {
+	called, input := mockLLM.GetProcessCall()
+	if !called {
 		t.Error("expected LLM.Process to be called")
 	}
-	if mockLLM.InputText != "um hello um world" {
-		t.Errorf("expected LLM input 'um hello um world', got %q", mockLLM.InputText)
+	if input != "um hello um world" {
+		t.Errorf("expected LLM input 'um hello um world', got %q", input)
 	}
 
 	// verify injection used LLM output
@@ -527,4 +529,109 @@ func TestPipeline_WithMocks_LLMProcessing(t *testing.T) {
 	}
 
 	p.Stop()
+}
+
+func TestPipeline_ForwardsPartialsFromStreamingTranscriber(t *testing.T) {
+	// Arrange
+	cfg := testutil.TestConfig()
+	cfg.Injection.Backends = []string{"clipboard"}
+
+	mockRecorder := testutil.NewMockRecorder()
+	mockTranscriber := testutil.NewMockPartialTranscriber("hello world")
+	mockInjector := testutil.NewMockInjector()
+
+	p := New(cfg,
+		WithRecorderFactory(testutil.MockRecorderFactory(mockRecorder)),
+		WithTranscriberFactory(testutil.MockTranscriberFactory(mockTranscriber)),
+		WithInjectorFactory(testutil.MockInjectorFactory(mockInjector)),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	p.Run(ctx)
+	defer p.Stop()
+	time.Sleep(50 * time.Millisecond)
+
+	// Act
+	mockTranscriber.SendPartial(transcriber.TranscriptUpdate{Final: "hello", Draft: "wor"})
+
+	// Assert
+	select {
+	case got := <-p.GetPartialCh():
+		want := transcriber.TranscriptUpdate{Final: "hello", Draft: "wor"}
+		if got != want {
+			t.Errorf("partial = %+v, want %+v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pipeline never forwarded the transcript snapshot")
+	}
+}
+
+func TestPipeline_BatchTranscriberProducesNoPartials(t *testing.T) {
+	// Arrange
+	cfg := testutil.TestConfig()
+	cfg.Injection.Backends = []string{"clipboard"}
+
+	mockRecorder := testutil.NewMockRecorder()
+	mockTranscriber := testutil.NewMockTranscriber("hello world")
+	mockInjector := testutil.NewMockInjector()
+
+	p := New(cfg,
+		WithRecorderFactory(testutil.MockRecorderFactory(mockRecorder)),
+		WithTranscriberFactory(testutil.MockTranscriberFactory(mockTranscriber)),
+		WithInjectorFactory(testutil.MockInjectorFactory(mockInjector)),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// Act: run a whole utterance through to injection
+	p.Run(ctx)
+	defer p.Stop()
+	time.Sleep(50 * time.Millisecond)
+	p.GetActionCh() <- Inject
+	time.Sleep(100 * time.Millisecond)
+
+	// Assert: the channel stays empty, so consumers fall back to status alone
+	select {
+	case got := <-p.GetPartialCh():
+		t.Errorf("batch transcriber produced partial %+v, want none", got)
+	default:
+	}
+}
+
+// A pipeline nobody is watching must still run to completion.
+func TestPipeline_UnreadPartialsDoNotStallInjection(t *testing.T) {
+	// Arrange
+	cfg := testutil.TestConfig()
+	cfg.Injection.Backends = []string{"clipboard"}
+
+	mockRecorder := testutil.NewMockRecorder()
+	mockTranscriber := testutil.NewMockPartialTranscriber("hello world")
+	mockInjector := testutil.NewMockInjector()
+
+	p := New(cfg,
+		WithRecorderFactory(testutil.MockRecorderFactory(mockRecorder)),
+		WithTranscriberFactory(testutil.MockTranscriberFactory(mockTranscriber)),
+		WithInjectorFactory(testutil.MockInjectorFactory(mockInjector)),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	p.Run(ctx)
+	defer p.Stop()
+	time.Sleep(50 * time.Millisecond)
+
+	// Act: flood the partial channel, reading none of it
+	for i := 0; i < partialBuffer*4; i++ {
+		mockTranscriber.SendPartial(transcriber.TranscriptUpdate{Draft: "word"})
+	}
+	p.GetActionCh() <- Inject
+
+	// Assert
+	testutil.WaitForCondition(t, func() bool {
+		return len(mockInjector.GetInjectedTexts()) == 1
+	}, time.Second)
 }

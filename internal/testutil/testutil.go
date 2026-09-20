@@ -209,7 +209,8 @@ func (m *MockRecorder) Start(ctx context.Context) (<-chan recording.AudioFrame, 
 	}
 
 	m.mu.Lock()
-	m.stopCh = make(chan struct{})
+	stopCh := make(chan struct{})
+	m.stopCh = stopCh
 	m.mu.Unlock()
 
 	m.recording.Store(true)
@@ -217,6 +218,8 @@ func (m *MockRecorder) Start(ctx context.Context) (<-chan recording.AudioFrame, 
 	frameCh := make(chan recording.AudioFrame, len(m.Frames)+1)
 	errCh := make(chan error, 1)
 
+	// The goroutine reads its own copy of stopCh: Stop clears the field, and
+	// reading it from here would race with that.
 	go func() {
 		defer close(frameCh)
 		defer close(errCh)
@@ -225,7 +228,7 @@ func (m *MockRecorder) Start(ctx context.Context) (<-chan recording.AudioFrame, 
 			select {
 			case <-ctx.Done():
 				return
-			case <-m.stopCh:
+			case <-stopCh:
 				return
 			case frameCh <- frame:
 			}
@@ -234,7 +237,7 @@ func (m *MockRecorder) Start(ctx context.Context) (<-chan recording.AudioFrame, 
 		// keep channel open until stopped
 		select {
 		case <-ctx.Done():
-		case <-m.stopCh:
+		case <-stopCh:
 		}
 	}()
 
@@ -309,6 +312,31 @@ func (m *MockTranscriber) GetFinalTranscription() (string, error) {
 	return m.Transcription, nil
 }
 
+// MockPartialTranscriber is a MockTranscriber that also reports transcript
+// snapshots, standing in for a streaming transcriber.
+type MockPartialTranscriber struct {
+	*MockTranscriber
+
+	partialCh chan transcriber.TranscriptUpdate
+}
+
+func NewMockPartialTranscriber(transcription string) *MockPartialTranscriber {
+	return &MockPartialTranscriber{
+		MockTranscriber: NewMockTranscriber(transcription),
+		partialCh:       make(chan transcriber.TranscriptUpdate, 16),
+	}
+}
+
+func (m *MockPartialTranscriber) Partials() <-chan transcriber.TranscriptUpdate {
+	return m.partialCh
+}
+
+// SendPartial publishes one transcript snapshot, as a streaming adapter would
+// mid-utterance.
+func (m *MockPartialTranscriber) SendPartial(update transcriber.TranscriptUpdate) {
+	m.partialCh <- update
+}
+
 // MockInjector implements injection.Injector for testing
 type MockInjector struct {
 	InjectedTexts []string
@@ -365,6 +393,13 @@ func (m *MockLLMAdapter) Process(ctx context.Context, text string) (string, erro
 	return m.ProcessedText, nil
 }
 
+// GetProcessCall reports whether Process ran and the text it was given.
+func (m *MockLLMAdapter) GetProcessCall() (bool, string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ProcessCalled, m.InputText
+}
+
 // Factory helpers for pipeline testing
 
 // MockRecorderFactory returns a factory that creates the given mock recorder
@@ -375,7 +410,7 @@ func MockRecorderFactory(mock *MockRecorder) func(cfg recording.Config) recordin
 }
 
 // MockTranscriberFactory returns a factory that creates the given mock transcriber
-func MockTranscriberFactory(mock *MockTranscriber) func(cfg transcriber.Config) (transcriber.Transcriber, error) {
+func MockTranscriberFactory(mock transcriber.Transcriber) func(cfg transcriber.Config) (transcriber.Transcriber, error) {
 	return func(cfg transcriber.Config) (transcriber.Transcriber, error) {
 		return mock, nil
 	}

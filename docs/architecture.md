@@ -43,6 +43,7 @@ Key interface (simplified):
 - `Pipeline.GetActionCh()` receives actions (toggle inject).
 - `Pipeline.GetNotifyCh()` emits user-facing events.
 - `Pipeline.GetErrorCh()` emits errors for the daemon to handle.
+- `Pipeline.GetPartialCh()` emits transcript snapshots while a streaming transcriber runs.
 
 ## Recording
 `internal/recording/recording.go` defines `Recorder` with `Start/Stop/IsRecording`.
@@ -56,6 +57,16 @@ The default implementation wraps `pw-record` and emits `AudioFrame` chunks on a 
 - `StreamingAdapter`: `Start/SendChunk/Results/Finalize/Close` for realtime.
 
 `NewTranscriber()` selects between `SimpleTranscriber` (batch) and `StreamingTranscriber` (streaming) based on provider model metadata. Streaming adapters deliver incremental `TranscriptionResult` events and a final transcript on stop/finalize.
+
+### Interim transcripts
+`StreamingTranscriber` also implements the optional `PartialTranscriber` interface, publishing a `TranscriptUpdate` every time a result changes the transcript:
+
+- `Final`: everything the provider has confirmed so far.
+- `Draft`: the unconfirmed tail, which the next update replaces wholesale rather than extends.
+
+The two are kept apart so a consumer can render confirmed and unconfirmed text differently without tracking state. The pipeline forwards these to `GetPartialCh()`.
+
+Sends are non-blocking at both hops and drop when the buffer is full: each snapshot carries the whole transcript, so a slow consumer is corrected by the next one and transcription is never held up. `SimpleTranscriber` does not implement `PartialTranscriber`, so batch models produce no partials and consumers fall back to status alone.
 
 ## LLM post-processing
 `internal/llm/llm.go` defines an `Adapter` interface with `Process(text, config)`.

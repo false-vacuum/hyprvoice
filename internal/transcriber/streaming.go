@@ -28,3 +28,24 @@ type StreamingAdapter interface {
 	// Close gracefully closes the streaming connection
 	Close() error
 }
+
+// TranscriptUpdate is a snapshot of the transcript while an utterance is still
+// in progress.
+//
+// Final holds everything the provider has confirmed. Draft holds the
+// unconfirmed tail, which the next update replaces wholesale rather than
+// extends, because a streaming provider revises the tail as it hears more.
+// Keeping the two apart lets a consumer render confirmed and unconfirmed text
+// differently without tracking any state of its own.
+type TranscriptUpdate struct {
+	Final string `json:"final"`
+	Draft string `json:"draft"`
+}
+
+// PartialTranscriber is implemented by transcribers that can report the
+// transcript as it is being built. Batch transcribers see the audio only after
+// recording stops, so they do not implement it and consumers fall back to
+// state-only feedback.
+type PartialTranscriber interface {
+	Partials() <-chan TranscriptUpdate
+}

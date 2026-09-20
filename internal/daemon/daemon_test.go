@@ -11,6 +11,7 @@ import (
 
 	"github.com/leonardotrapani/hyprvoice/internal/notify"
 	"github.com/leonardotrapani/hyprvoice/internal/pipeline"
+	"github.com/leonardotrapani/hyprvoice/internal/transcriber"
 )
 
 const testConfigContent = `[recording]
@@ -368,4 +369,7 @@ func (m *MockPipeline) GetErrorCh() <-chan pipeline.PipelineError {
 func (m *MockPipeline) GetActionCh() chan<- pipeline.Action { return make(chan pipeline.Action) }
 func (m *MockPipeline) GetNotifyCh() <-chan notify.MessageType {
 	return make(chan notify.MessageType)
+}
+func (m *MockPipeline) GetPartialCh() <-chan transcriber.TranscriptUpdate {
+	return make(chan transcriber.TranscriptUpdate)
 }

@@ -11,14 +11,22 @@ import (
 	"github.com/leonardotrapani/hyprvoice/internal/recording"
 )
 
+// partialBuffer is how many transcript snapshots may queue up for a consumer
+// that is not keeping up. Each snapshot supersedes the one before it, so a
+// shallow buffer is enough to absorb a brief stall.
+const partialBuffer = 16
+
 // StreamingTranscriber wraps a StreamingAdapter and implements the Transcriber interface.
 // It streams audio chunks to the adapter in real-time and accumulates transcription results.
 type StreamingTranscriber struct {
 	adapter  StreamingAdapter
 	language string
 
-	// accumulated final text
+	// accumulated final text, plus the unconfirmed tail from the most recent
+	// interim result
 	finalText strings.Builder
+	draft     string
+	partialCh chan TranscriptUpdate
 	mu        sync.Mutex
 	fatalErr  error
 
@@ -30,8 +38,9 @@ type StreamingTranscriber struct {
 
 func NewStreamingTranscriber(adapter StreamingAdapter, language string) *StreamingTranscriber {
 	return &StreamingTranscriber{
-		adapter:  adapter,
-		language: language,
+		adapter:   adapter,
+		language:  language,
+		partialCh: make(chan TranscriptUpdate, partialBuffer),
 	}
 }
 
@@ -138,14 +147,47 @@ func (t *StreamingTranscriber) processResult(result TranscriptionResult, errCh c
 		log.Printf("streaming transcriber: result error: %v", result.Error)
 		return
 	}
-	if result.IsFinal && result.Text != "" {
-		t.mu.Lock()
+	t.recordText(result.Text, result.IsFinal)
+}
+
+// recordText folds one result into the transcript and publishes the resulting
+// snapshot. A final result is appended to the confirmed text and clears the
+// draft; an interim result replaces the draft.
+//
+// Empty text is ignored: providers emit blank interim results during silence,
+// and acting on them would blank the draft and make the display flicker.
+func (t *StreamingTranscriber) recordText(text string, isFinal bool) {
+	if text == "" {
+		return
+	}
+
+	t.mu.Lock()
+	if isFinal {
 		if t.finalText.Len() > 0 {
 			t.finalText.WriteString(" ")
 		}
-		t.finalText.WriteString(result.Text)
-		t.mu.Unlock()
+		t.finalText.WriteString(text)
+		t.draft = ""
+	} else {
+		t.draft = text
 	}
+	update := TranscriptUpdate{Final: t.finalText.String(), Draft: t.draft}
+	t.mu.Unlock()
+
+	select {
+	case t.partialCh <- update:
+	default:
+		// Deliberately dropped. The next snapshot carries the whole transcript
+		// again, so a consumer that falls behind catches up rather than losing
+		// text, and transcription never waits on it.
+	}
+}
+
+// Partials returns the channel of transcript snapshots. It is never closed:
+// Stop can run more than once (the pipeline both defers it and calls it when
+// injecting), so consumers stop on their own context instead.
+func (t *StreamingTranscriber) Partials() <-chan TranscriptUpdate {
+	return t.partialCh
 }
 
 func (t *StreamingTranscriber) drainRemainingResults(resultsCh <-chan TranscriptionResult) {
@@ -157,13 +199,10 @@ func (t *StreamingTranscriber) drainRemainingResults(resultsCh <-chan Transcript
 			if !ok {
 				return
 			}
-			if result.IsFinal && result.Text != "" {
-				t.mu.Lock()
-				if t.finalText.Len() > 0 {
-					t.finalText.WriteString(" ")
-				}
-				t.finalText.WriteString(result.Text)
-				t.mu.Unlock()
+			// Finals only: a late interim result would revise a tail nobody
+			// is going to see, and never reaches GetFinalTranscription.
+			if result.IsFinal {
+				t.recordText(result.Text, true)
 			}
 		case <-timeout:
 			return

@@ -44,6 +44,11 @@ type Pipeline interface {
 	GetActionCh() chan<- Action
 	GetErrorCh() <-chan PipelineError
 	GetNotifyCh() <-chan notify.MessageType
+
+	// GetPartialCh emits transcript snapshots while a streaming transcriber is
+	// running. A batch transcriber produces none, so consumers must treat the
+	// channel going quiet as normal and fall back to status alone.
+	GetPartialCh() <-chan transcriber.TranscriptUpdate
 }
 
 // Factory types for dependency injection
@@ -83,12 +88,17 @@ func WithLLMAdapterFactory(f LLMAdapterFactory) Option {
 	}
 }
 
+// partialBuffer is how many transcript snapshots may queue for a consumer that
+// is not keeping up. Each one supersedes the last, so a shallow buffer suffices.
+const partialBuffer = 16
+
 type pipeline struct {
-	status   Status
-	actionCh chan Action
-	errorCh  chan PipelineError
-	notifyCh chan notify.MessageType
-	config   *config.Config
+	status    Status
+	actionCh  chan Action
+	errorCh   chan PipelineError
+	notifyCh  chan notify.MessageType
+	partialCh chan transcriber.TranscriptUpdate
+	config    *config.Config
 
 	mu       sync.RWMutex
 	wg       sync.WaitGroup
@@ -106,10 +116,11 @@ type pipeline struct {
 
 func New(cfg *config.Config, opts ...Option) Pipeline {
 	p := &pipeline{
-		actionCh: make(chan Action, 1),
-		errorCh:  make(chan PipelineError, 10),
-		notifyCh: make(chan notify.MessageType, 10),
-		config:   cfg,
+		actionCh:  make(chan Action, 1),
+		errorCh:   make(chan PipelineError, 10),
+		notifyCh:  make(chan notify.MessageType, 10),
+		partialCh: make(chan transcriber.TranscriptUpdate, partialBuffer),
+		config:    cfg,
 		// default factories
 		recorderFactory:    recording.NewRecorder,
 		transcriberFactory: transcriber.NewTranscriber,
@@ -166,6 +177,11 @@ func (p *pipeline) run(ctx context.Context) {
 
 	log.Printf("Pipeline: Starting transcriber")
 	p.setStatus(Transcribing)
+
+	// Only streaming transcribers report a transcript mid-utterance.
+	if pt, ok := t.(transcriber.PartialTranscriber); ok {
+		go p.forwardPartials(ctx, pt.Partials())
+	}
 
 	tErrCh, err := t.Start(ctx, frameCh)
 	if err != nil {
@@ -250,6 +266,38 @@ func (p *pipeline) GetNotifyCh() <-chan notify.MessageType {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.notifyCh
+}
+
+func (p *pipeline) GetPartialCh() <-chan transcriber.TranscriptUpdate {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.partialCh
+}
+
+// forwardPartials republishes transcript snapshots from a streaming
+// transcriber until the run ends.
+func (p *pipeline) forwardPartials(ctx context.Context, in <-chan transcriber.TranscriptUpdate) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case update, ok := <-in:
+			if !ok {
+				return
+			}
+			p.sendPartial(update)
+		}
+	}
+}
+
+// sendPartial publishes a transcript snapshot, discarding it when nothing is
+// keeping up. Each snapshot carries the whole transcript, so a consumer that
+// misses one is corrected by the next, and transcription never blocks on it.
+func (p *pipeline) sendPartial(update transcriber.TranscriptUpdate) {
+	select {
+	case p.partialCh <- update:
+	default:
+	}
 }
 
 func (p *pipeline) sendError(title, message string, err error) {
