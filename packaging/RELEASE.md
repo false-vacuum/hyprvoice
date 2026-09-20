@@ -1,110 +1,73 @@
 # Release Process
 
-This document describes how to create a new release of hyprvoice.
+How to cut a release of this fork and publish it to the AUR.
 
-## Automated Release Process
+## Version scheme
 
-### 1. Create a Release Tag
+Tags are `vMAJOR.MINOR.PATCH`, continuing upstream's numbering (the last upstream tag is `v1.0.2`).
+
+- **Major**: breaking changes
+- **Minor**: new features, backwards compatible
+- **Patch**: bug fixes, small improvements
+
+The `hyprvoice-git` package does not need a tag to build. Its `pkgver()` derives a version from `git describe`, so `v1.0.2` plus 12 commits becomes `1.0.2.r12.g7eae5f9`, which orders above `1.0.2`. Tags only matter for readable versions and GitHub releases.
+
+## Cut a release
 
 ```bash
-# Make sure you're on main branch with latest changes
 git checkout main
 git pull origin main
+go build ./... && go vet ./... && go test ./...
+python3 overlay/test_state.py
 
-# Create and push a version tag
-git tag v0.1.0
-git push origin v0.1.0
+git tag v1.1.0
+git push origin main
+git push origin v1.1.0
 ```
 
-### 2. GitHub Actions Automatically:
+`.github/workflows/release.yml` builds `hyprvoice-linux-x86_64` on a `v*` tag, runs the tests, and attaches the binary and its checksum to a GitHub release. The workflow is inherited from upstream and publishes to this fork's repo.
 
-- ✅ Builds the binary with CGO for Linux x86_64
-- ✅ Runs all tests  
-- ✅ Creates a GitHub release with changelog
-- ✅ Uploads `hyprvoice-linux-x86_64` binary
-- ✅ Generates and uploads SHA256 checksums
+## Publish to the AUR
 
-### 3. Update AUR Package
+The AUR package is `hyprvoice-git`, whose repository is separate from this one. Only `PKGBUILD` and `.SRCINFO` live there.
+
+Before the first publish, `packaging/hyprvoice-git/PKGBUILD` needs its `source=` switched from the local `file://` path to the public remote:
 
 ```bash
-cd packaging/
-./update-aur.sh v0.1.0
+source=("hyprvoice::git+https://github.com/false-vacuum/hyprvoice.git")
 ```
 
-That's it! The script handles everything:
-- Updates PKGBUILD version and checksums
-- Copies files to AUR repository  
-- Generates .SRCINFO
-- Tests the build
-- Commits and pushes to AUR (with confirmation)
-
-## Manual Release (if needed)
-
-### Build Binary
+A VCS package builds whatever is on `main`, so push first, then:
 
 ```bash
-CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o hyprvoice-linux-x86_64 ./cmd/hyprvoice
+git clone ssh://aur@aur.archlinux.org/hyprvoice-git.git
+cd hyprvoice-git
+cp ../hyprvoice/packaging/hyprvoice-git/PKGBUILD .
+makepkg --printsrcinfo > .SRCINFO
+makepkg -si                      # confirm it builds and installs clean
+git add PKGBUILD .SRCINFO
+git commit -m "upgpkg: hyprvoice-git 1.1.0"
+git push
 ```
 
-### Create Release
+Publishing needs an SSH key registered on your AUR account. Regenerate `.SRCINFO` on every change to `PKGBUILD`; the AUR rejects pushes where the two disagree.
 
-1. Go to GitHub Releases
-2. Click "Create a new release"
-3. Tag: `v0.1.0`
-4. Release title: `Release 0.1.0`
-5. Upload `hyprvoice-linux-x86_64`
-6. Publish release
+`hyprvoice-bin` on the AUR is upstream's, pinned to the archived v1.0.2. It is not ours and is not updated by this process.
 
-## Version Scheme
+## Checklist
 
-- **Major.Minor.Patch** (e.g., `0.1.0`)
-- **Major**: Breaking changes
-- **Minor**: New features, backwards compatible
-- **Patch**: Bug fixes, small improvements
-
-## Complete Release Checklist
-
-### Pre-release
-- [ ] All tests pass: `go test ./...`
-- [ ] Binary builds: `go build ./cmd/hyprvoice` 
-- [ ] Configure command works: `./hyprvoice configure --help`
-- [ ] Version bumped in any relevant files
-- [ ] Changes documented
-
-### GitHub Release  
-- [ ] Create and push version tag: `git tag v0.1.0 && git push origin v0.1.0`
-- [ ] Verify GitHub Actions completed successfully
-- [ ] Verify binary uploaded to GitHub releases
-- [ ] Verify checksums generated
-
-### AUR Package Update (if AUR package exists)
-- [ ] Run complete AUR update: `./packaging/update-aur.sh 0.1.0`
-- [ ] Verify AUR package page updated
-
-### Post-release Verification
-- [ ] Test AUR installation: `yay -S hyprvoice-bin`  
-- [ ] Test configure command: `hyprvoice configure`
-- [ ] Test service: `systemctl --user status hyprvoice.service`
-- [ ] Update project README if needed
-
-## Files Updated in Release
-
-- `packaging/PKGBUILD` - Version and checksums
-- GitHub Release - Binary and checksums
-- AUR repository - Updated package
+- [ ] `go build ./... && go vet ./... && go test ./...`
+- [ ] `python3 overlay/test_state.py`
+- [ ] `cd packaging/hyprvoice-git && makepkg -si` succeeds from a clean tree
+- [ ] `namcap` clean on the built package
+- [ ] README reflects anything new
+- [ ] Tag pushed, GitHub Actions green, binary attached to the release
+- [ ] AUR updated and the package page shows the new version
 
 ## Troubleshooting
 
-### Build Fails
-- Check that all CGO dependencies are installed
-- Ensure Go version matches workflow (1.21+)
+**`not a clone of ...`**: makepkg caches the source clone next to the PKGBUILD and refuses to reuse it when `source=` changes. `rm -rf packaging/hyprvoice-git/hyprvoice`.
 
-### AUR Package Issues  
-- Run `makepkg -si` to test locally
-- Check checksums match: `updpkgsums`
-- Verify binary downloads correctly
+**`pkgver()` fails**: the build needs tags. A tarball download has no `.git`, and a shallow clone may have no tags reachable from `HEAD`.
 
-### GitHub Actions Issues
-- Check workflow logs in Actions tab
-- Ensure tag follows `v*` pattern
-- Verify GITHUB_TOKEN has necessary permissions
+**Build fails in a clean chroot**: check `makedepends`. Use `extra-x86_64-build` to reproduce what an AUR user's clean environment sees.

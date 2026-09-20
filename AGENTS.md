@@ -25,6 +25,12 @@ This repo is a Go CLI + daemon for voice-powered typing on Wayland/Hyprland.
 - `w` holds the connection open and streams JSON status events (drives the overlay)
 - Config: ~/.config/hyprvoice/config.toml (hot reloaded by daemon)
 
+## Local install (Arch)
+- Build and install from the working repo: `cd packaging/hyprvoice-git && makepkg -si`
+- The PKGBUILD sources the repo it ships in (`git+file://${startdir}/../..`), so it builds committed HEAD of your clone, not the GitHub remote. Commit before building.
+- Installs `/usr/bin/hyprvoice`, `/usr/bin/hyprvoice-overlay`, `/usr/lib/systemd/user/hyprvoice.service`.
+- A stale unit at `~/.config/systemd/user/hyprvoice.service` shadows the packaged one; remove it and `systemctl --user reenable hyprvoice`.
+
 ## Configuration
 - First-time setup: hyprvoice onboarding (guided flow, no advanced settings)
 - Full editor: hyprvoice configure (menu-based, includes advanced settings)

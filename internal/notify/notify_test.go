@@ -5,6 +5,16 @@ import (
 	"testing"
 )
 
+// skipIfCI skips a test that shells out to notify-send. Without it the suite
+// puts real popups on the screen of whoever is running it, including during a
+// package build.
+func skipIfCI(t *testing.T) {
+	t.Helper()
+	if os.Getenv("CI") == "true" {
+		t.Skip("skipping: calls notify-send")
+	}
+}
+
 func testMessages() map[MessageType]Message {
 	return map[MessageType]Message{
 		MsgRecordingStarted:   {Title: "Hyprvoice", Body: "Recording Started", IsError: false},
@@ -17,9 +27,7 @@ func testMessages() map[MessageType]Message {
 }
 
 func TestDesktop_Send(t *testing.T) {
-	if os.Getenv("CI") == "true" {
-		t.Skip("Skipping Desktop test in CI - calls notify-send")
-	}
+	skipIfCI(t)
 	desktop := NewDesktop(testMessages())
 
 	// Test Send for different message types (won't actually send, just verify no panic)
@@ -29,9 +37,7 @@ func TestDesktop_Send(t *testing.T) {
 }
 
 func TestDesktop_Error(t *testing.T) {
-	if os.Getenv("CI") == "true" {
-		t.Skip("Skipping Desktop test in CI - calls notify-send")
-	}
+	skipIfCI(t)
 	desktop := NewDesktop(testMessages())
 	desktop.Error("Test Error Message")
 }
@@ -75,6 +81,9 @@ func TestNewNotifier(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.notifType == "desktop" {
+				skipIfCI(t)
+			}
 			notifier := NewNotifier(tt.notifType, msgs)
 
 			// Test the notifier works
@@ -90,9 +99,12 @@ func TestNotifierInterface(t *testing.T) {
 	// Test that all notifiers implement the Notifier interface
 	var notifier Notifier
 
-	notifier = NewDesktop(msgs)
-	notifier.Send(MsgRecordingStarted)
-	notifier.Error("Error")
+	t.Run("desktop", func(t *testing.T) {
+		skipIfCI(t)
+		desktop := NewDesktop(msgs)
+		desktop.Send(MsgRecordingStarted)
+		desktop.Error("Error")
+	})
 
 	notifier = NewLog(msgs)
 	notifier.Send(MsgRecordingStarted)

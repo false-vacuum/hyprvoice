@@ -1,8 +1,8 @@
-Repository Status: `Archived`.
-
-> Moved temporarily to MacOS, will not be able to maintain this project for now.
-
 # Hyprvoice - Voice-Powered Typing for Wayland/Hyprland
+
+> **This is a fork.** [leonardotrapani/hyprvoice](https://github.com/leonardotrapani/hyprvoice), the original, is archived and unmaintained. This fork continues it.
+>
+> Added here: a Deepgram Flux streaming adapter, interim transcripts through the pipeline, a status event stream, and an on-screen overlay that shows the transcript as you speak. See [What this fork adds](#what-this-fork-adds).
 
 26 voice models, cloud and local, built for hyprland dictation.
 
@@ -18,6 +18,15 @@ Press a toggle key, speak, and get instant text input. Built natively for Waylan
 - Personalization through custom prompt and keywords sent both to LLM and to voice model.
 - Whisprflow quality but for linux and open source.
 - Support for streaming models for blazing fast transcription.
+
+## What this fork adds
+
+- **Deepgram Flux** (`flux-general-en`), a streaming model that returns text while you are still speaking.
+- **Interim transcripts.** Streaming adapters surface a draft alongside confirmed text, so the words appear as they are recognized instead of all at once at the end.
+- **On-screen overlay.** A layer-shell indicator showing pipeline state, microphone level and the live transcript, with unconfirmed words dimmed. See [On-screen overlay](#on-screen-overlay).
+- **Status event stream.** `hyprvoice status --follow --format json` emits one JSON object per state change, carrying status, microphone level and the transcript. The overlay is a plain client of this, so anything else can be too.
+
+Everything else is upstream's.
 
 ## Voice Providers and Models
 
@@ -58,24 +67,45 @@ All supported speech-to-text providers and models:
 
 ## On-screen overlay
 
-Instead of desktop notifications, hyprvoice can show a small indicator near the center of the screen with the transcript as it is recognised, unconfirmed words dimmed:
+Instead of desktop notifications, hyprvoice can show a small indicator near the center of the screen with the transcript as it is recognized, unconfirmed words dimmed.
+
+Set `type = "overlay"` under `[notifications]` in `~/.config/hyprvoice/config.toml`. The daemon starts and stops the overlay for you; it is a client of the status stream, so it can crash or be killed without affecting dictation.
+
+Needs `gtk4`, `gtk4-layer-shell` and `python-gobject`. The package installs the client to `/usr/bin/hyprvoice-overlay`; building from source by hand, copy `overlay/hyprvoice-overlay` somewhere on the daemon's `PATH` or to `~/.local/bin`. See [docs/config.md](docs/config.md#overlay).
+
+## Watching the pipeline
 
 ```bash
-install -Dm755 overlay/hyprvoice-overlay ~/.local/bin/hyprvoice-overlay
+hyprvoice status --follow --format json
 ```
 
-Then set `type = "overlay"` under `[notifications]`. Needs `gtk4`, `gtk4-layer-shell` and `python-gobject`. See [docs/config.md](docs/config.md#overlay).
+One JSON object per state change: `status`, whether the microphone is open, normalized `levels` for a waveform, and `transcript.final` / `transcript.draft` while a streaming model is running. Drop `--format json` for a human-readable stream.
 
-## Installation (AUR)
+## Installation
+
+### From source (Arch)
 
 ```bash
-yay -S hyprvoice-bin
-# or
-paru -S hyprvoice-bin
+git clone https://github.com/false-vacuum/hyprvoice.git
+cd hyprvoice/packaging/hyprvoice-git
+makepkg -si
 ```
 
-The package installs system dependencies and the systemd user service.
-You'll still need an API key for a cloud provider, or whisper.cpp for local transcription. Onboarding will guide you through the choice.
+Builds committed `HEAD` of your clone and installs the binary, the overlay client and the systemd user service. Commit your work before building, since the PKGBUILD packages the last commit rather than the working tree.
+
+### Other distributions
+
+```bash
+go build -o hyprvoice ./cmd/hyprvoice
+```
+
+Put the binary on your `PATH`, install `overlay/hyprvoice-overlay` alongside it if you want the overlay, and install `packaging/hyprvoice.service` as a systemd user unit. Runtime dependencies: PipeWire, `wl-clipboard`, `wtype`, `libnotify`.
+
+### Upstream's binary package
+
+The AUR still carries `hyprvoice-bin`, which is the original author's archived v1.0.2. It does not include anything from this fork.
+
+Either way you'll need an API key for a cloud provider, or whisper.cpp for local transcription. Onboarding will guide you through the choice.
 
 ## Quick Start
 
@@ -120,7 +150,7 @@ Each press toggles between recording and idle.
 
 ### Push-to-talk (hold-to-record)
 
-Combine both bind types to get hold-to-record behavior — press to start, release to stop:
+Combine both bind types to get hold-to-record behavior, press to start and release to stop:
 
 ```bash
 # ~/.config/hypr/hyprland.conf
@@ -128,7 +158,7 @@ bind  = SUPER, R, exec, hyprvoice toggle   # key down → start recording
 bindr = SUPER, R, exec, hyprvoice toggle    # key up   → stop and transcribe
 ```
 
-This gives a walkie-talkie feel: hold the key while speaking, release when done. The daemon receives two `toggle` commands — the first starts recording, the second stops it and triggers transcription.
+This gives a walkie-talkie feel: hold the key while speaking, release when done. The daemon receives two `toggle` commands: the first starts recording, the second stops it and triggers transcription.
 
 ### `bind` vs `bindr`
 
@@ -150,6 +180,7 @@ hyprvoice serve
 hyprvoice toggle
 hyprvoice cancel
 hyprvoice status
+hyprvoice status --follow --format json
 hyprvoice version
 hyprvoice stop
 ```
@@ -374,6 +405,10 @@ stateDiagram-v2
 6. injecting → type or paste text
 7. Complete → idle; pipeline stops; daemon clears reference
 8. Notifications at key transitions
+
+## Credits
+
+Originally written by [Leonardo Trapani](https://github.com/leonardotrapani). This fork picks up where [leonardotrapani/hyprvoice](https://github.com/leonardotrapani/hyprvoice) left off when it was archived.
 
 ## License
 

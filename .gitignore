@@ -36,3 +36,9 @@ tmp/*
 CLAUDE.md
 __pycache__/
 *.pyc
+
+# makepkg build artifacts
+packaging/*/src/
+packaging/*/pkg/
+packaging/*/hyprvoice/
+packaging/*/*.pkg.tar.zst

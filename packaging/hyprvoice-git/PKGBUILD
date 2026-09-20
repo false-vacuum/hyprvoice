@@ -1,0 +1,66 @@
+# Maintainer: Jake Greene <jacobgreene1991@gmail.com>
+pkgname=hyprvoice-git
+pkgver=1.0.2.r22.g64d851c
+pkgrel=1
+pkgdesc="Voice-powered typing for Wayland/Hyprland (fork of the archived leonardotrapani/hyprvoice)"
+arch=('x86_64')
+url="https://github.com/false-vacuum/hyprvoice"
+license=('MIT')
+depends=(
+    'pipewire'
+    'pipewire-pulse'
+    'pipewire-audio'
+    'wl-clipboard'
+    'wtype'
+    'libnotify'
+    'systemd'
+)
+makedepends=('go' 'git')
+optdepends=(
+    'gtk4: On-screen overlay indicator'
+    'gtk4-layer-shell: On-screen overlay indicator'
+    'python-gobject: On-screen overlay indicator'
+    'ydotool: Alternative text injection backend (recommended for Chromium apps)'
+)
+provides=('hyprvoice')
+conflicts=('hyprvoice')
+# Builds the repo this PKGBUILD ships in, at committed HEAD. The GitHub remote
+# still carries upstream's archived tree, so it is not a usable source yet.
+source=("hyprvoice::git+file://${startdir}/../..")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "${srcdir}/hyprvoice"
+    git describe --tags | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+export CGO_CPPFLAGS="${CPPFLAGS}"
+export CGO_CFLAGS="${CFLAGS}"
+export CGO_CXXFLAGS="${CXXFLAGS}"
+export CGO_LDFLAGS="${LDFLAGS}"
+# -modcacherw keeps the module cache writable so makepkg -c can clean it up.
+export GOFLAGS="-buildmode=pie -trimpath -mod=readonly -modcacherw"
+
+prepare() {
+    cd "${srcdir}/hyprvoice"
+    go mod download
+}
+
+build() {
+    cd "${srcdir}/hyprvoice"
+    go build -ldflags "-linkmode=external" -o hyprvoice ./cmd/hyprvoice
+}
+
+check() {
+    cd "${srcdir}/hyprvoice"
+    # internal/notify shells out to notify-send unless CI is set.
+    CI=true go test ./...
+}
+
+package() {
+    cd "${srcdir}/hyprvoice"
+    install -Dm755 hyprvoice "${pkgdir}/usr/bin/hyprvoice"
+    install -Dm755 overlay/hyprvoice-overlay "${pkgdir}/usr/bin/hyprvoice-overlay"
+    install -Dm644 packaging/hyprvoice.service "${pkgdir}/usr/lib/systemd/user/hyprvoice.service"
+    install -Dm644 LICENSE.md "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE.md"
+}
