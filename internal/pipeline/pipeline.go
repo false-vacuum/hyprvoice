@@ -500,6 +500,15 @@ func (p *pipeline) handleInjectAction(ctx context.Context, recorder recording.Re
 		return r
 	}, textToInject)
 
+	// Tapping the hotkey without saying anything is a normal way to back out,
+	// not a failure, so it goes idle quietly instead of reporting that empty
+	// text could not be injected.
+	if strings.TrimSpace(textToInject) == "" {
+		log.Printf("Pipeline: nothing was transcribed, skipping injection")
+		p.setStatus(Idle)
+		return
+	}
+
 	injector := p.injectorFactory(p.config.ToInjectionConfig())
 
 	if err := injector.Inject(ctx, textToInject); err != nil {

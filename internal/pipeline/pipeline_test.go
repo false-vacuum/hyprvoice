@@ -634,3 +634,66 @@ func TestPipeline_UnreadPartialsDoNotStallInjection(t *testing.T) {
 		return len(mockInjector.GetInjectedTexts()) == 1
 	}, time.Second)
 }
+
+func TestPipeline_NothingSaidInjectsNothingAndDoesNotError(t *testing.T) {
+	// Arrange: a tap of the hotkey with no speech leaves an empty transcript.
+	cfg := &config.Config{
+		Recording: config.RecordingConfig{
+			SampleRate:        16000,
+			Channels:          1,
+			Format:            "s16",
+			BufferSize:        8192,
+			ChannelBufferSize: 30,
+			Timeout:           5 * time.Minute,
+		},
+		Transcription: config.TranscriptionConfig{
+			Provider: "openai",
+			Language: "en",
+			Model:    "whisper-1",
+		},
+		Providers: map[string]config.ProviderConfig{
+			"openai": {APIKey: "test-key"},
+		},
+		Injection: config.InjectionConfig{
+			Backends:         []string{"clipboard"},
+			ClipboardTimeout: 3 * time.Second,
+		},
+		Notifications: config.NotificationsConfig{
+			Enabled: true,
+			Type:    "log",
+		},
+	}
+
+	mockInjector := testutil.NewMockInjector()
+	p := New(cfg,
+		WithRecorderFactory(testutil.MockRecorderFactory(testutil.NewMockRecorder())),
+		WithTranscriberFactory(testutil.MockTranscriberFactory(testutil.NewMockTranscriber("   "))),
+		WithInjectorFactory(testutil.MockInjectorFactory(mockInjector)),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// Act
+	p.Run(ctx)
+	time.Sleep(50 * time.Millisecond)
+	p.GetActionCh() <- Inject
+	time.Sleep(100 * time.Millisecond)
+
+	// Assert
+	if injected := mockInjector.GetInjectedTexts(); len(injected) != 0 {
+		t.Errorf("expected no injection, got %q", injected)
+	}
+
+	select {
+	case err := <-p.GetErrorCh():
+		t.Errorf("a tap with nothing said reported an error: %v", err)
+	default:
+	}
+
+	if status := p.Status(); status != Idle {
+		t.Errorf("expected Idle after an empty transcript, got %v", status)
+	}
+
+	p.Stop()
+}
