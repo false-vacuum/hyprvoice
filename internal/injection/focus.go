@@ -3,7 +3,10 @@ package injection
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -43,16 +46,46 @@ type swayNode struct {
 }
 
 func swayFocusedApp(ctx context.Context) string {
-	out, err := exec.CommandContext(ctx, "swaymsg", "-t", "get_tree", "-r").Output()
-	if err != nil {
-		return ""
+	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
+	pattern := filepath.Join(runtimeDir, fmt.Sprintf("sway-ipc.%d.*.sock", os.Getuid()))
+	for _, socket := range liveSockets(os.Getenv("SWAYSOCK"), pattern) {
+		out, err := exec.CommandContext(ctx, "swaymsg", "-s", socket, "-t", "get_tree", "-r").Output()
+		if err != nil {
+			continue
+		}
+
+		var tree swayNode
+		if err := json.Unmarshal(out, &tree); err != nil {
+			continue
+		}
+		return findSwayFocus(tree)
+	}
+	return ""
+}
+
+// liveSockets lists the compositor IPC sockets worth trying, the one the
+// environment names first.
+//
+// The daemon runs as a user service, so its environment is whatever the
+// compositor session that started it exported. Restarting the compositor
+// leaves that pointing at a socket that no longer exists, and the new one is
+// found by its naming pattern instead.
+func liveSockets(fromEnv, pattern string) []string {
+	var sockets []string
+	if fromEnv != "" {
+		if _, err := os.Stat(fromEnv); err == nil {
+			sockets = append(sockets, fromEnv)
+		}
 	}
 
-	var tree swayNode
-	if err := json.Unmarshal(out, &tree); err != nil {
-		return ""
+	// Glob only fails on a malformed pattern, which leaves just the env socket.
+	matches, _ := filepath.Glob(pattern)
+	for _, match := range matches {
+		if match != fromEnv {
+			sockets = append(sockets, match)
+		}
 	}
-	return findSwayFocus(tree)
+	return sockets
 }
 
 func findSwayFocus(node swayNode) string {
@@ -72,16 +105,27 @@ func findSwayFocus(node swayNode) string {
 }
 
 func hyprlandFocusedApp(ctx context.Context) string {
-	out, err := exec.CommandContext(ctx, "hyprctl", "activewindow", "-j").Output()
-	if err != nil {
-		return ""
+	hyprDir := filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "hypr")
+	fromEnv := ""
+	if signature := os.Getenv("HYPRLAND_INSTANCE_SIGNATURE"); signature != "" {
+		fromEnv = filepath.Join(hyprDir, signature, ".socket.sock")
 	}
 
-	var window struct {
-		Class string `json:"class"`
+	for _, socket := range liveSockets(fromEnv, filepath.Join(hyprDir, "*", ".socket.sock")) {
+		// hyprctl names an instance by the directory its socket lives in.
+		signature := filepath.Base(filepath.Dir(socket))
+		out, err := exec.CommandContext(ctx, "hyprctl", "--instance", signature, "activewindow", "-j").Output()
+		if err != nil {
+			continue
+		}
+
+		var window struct {
+			Class string `json:"class"`
+		}
+		if err := json.Unmarshal(out, &window); err != nil {
+			continue
+		}
+		return strings.TrimSpace(window.Class)
 	}
-	if err := json.Unmarshal(out, &window); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(window.Class)
+	return ""
 }

@@ -2,6 +2,8 @@ package injection
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -192,5 +194,40 @@ func TestCopyArgs_PassesTextAfterASeparator(t *testing.T) {
 
 	if args[len(args)-2] != "--" || args[len(args)-1] != "-- not a flag" {
 		t.Errorf("copyArgs() = %v, want the text last, after --", args)
+	}
+}
+
+func TestLiveSockets_SkipsAStaleEnvSocketForALiveOne(t *testing.T) {
+	// Arrange: the env names a socket from a compositor session that has
+	// since restarted, and the new session's socket sits beside it.
+	dir := t.TempDir()
+	live := filepath.Join(dir, "sway-ipc.1000.200.sock")
+	if err := os.WriteFile(live, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(dir, "sway-ipc.1000.100.sock")
+
+	// Act
+	got := liveSockets(stale, filepath.Join(dir, "sway-ipc.1000.*.sock"))
+
+	// Assert
+	if want := []string{live}; !slices.Equal(got, want) {
+		t.Errorf("liveSockets() = %v, want %v", got, want)
+	}
+}
+
+func TestLiveSockets_TriesTheEnvSocketFirst(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a.sock", "b.sock"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fromEnv := filepath.Join(dir, "b.sock")
+
+	got := liveSockets(fromEnv, filepath.Join(dir, "*.sock"))
+
+	if want := []string{fromEnv, filepath.Join(dir, "a.sock")}; !slices.Equal(got, want) {
+		t.Errorf("liveSockets() = %v, want %v", got, want)
 	}
 }

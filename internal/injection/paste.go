@@ -3,6 +3,7 @@ package injection
 import (
 	"context"
 	"fmt"
+	"log"
 	"os/exec"
 	"strings"
 	"time"
@@ -92,7 +93,11 @@ func (p *pasteBackend) Inject(ctx context.Context, text string, timeout time.Dur
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	app := p.appFor(focusedApp(ctx))
+	focused := focusedApp(ctx)
+	if focused == "" {
+		log.Printf("Injection: could not tell which app is focused, pasting with %s", p.config.Default.Key)
+	}
+	app := p.appFor(focused)
 	args, err := wtypeKeyArgs(app.Key)
 	if err != nil {
 		return err

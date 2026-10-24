@@ -84,6 +84,8 @@ func (i *injector) getTimeout(backendName string) time.Duration {
 		return i.config.WtypeTimeout
 	case "clipboard":
 		return i.config.ClipboardTimeout
+	case "paste":
+		return i.config.PasteTimeout
 	default:
 		return 5 * time.Second
 	}
