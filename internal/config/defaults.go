@@ -59,6 +59,9 @@ func DefaultConfig() *Config {
 // shift+Insert, which is preferred: clipboard managers generally do not watch
 // primary, so a dictation pasted that way leaves no history entry and the
 // clipboard is never touched.
+//
+// JetBrains IDEs bind shift+Insert to Paste as well as ctrl+v, and IdeaVim
+// takes ctrl+v for visual block, so only shift+Insert pastes in every mode.
 func DefaultPasteApps() map[string]PasteAppConfig {
 	clipboard := func(key string) PasteAppConfig {
 		return PasteAppConfig{Key: key, Selection: "clipboard"}
@@ -79,5 +82,6 @@ func DefaultPasteApps() map[string]PasteAppConfig {
 		"xterm":                  clipboard("ctrl+shift+v"),
 		"rio":                    clipboard("ctrl+shift+v"),
 		"st":                     clipboard("ctrl+shift+v"),
+		"jetbrains-pycharm":      clipboard("shift+Insert"),
 	}
 }
