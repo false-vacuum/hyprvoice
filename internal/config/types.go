@@ -92,7 +92,7 @@ type PasteConfig struct {
 	Selection string `toml:"selection"`
 	// Apps maps an app id to how that app pastes. No single answer is right
 	// everywhere: terminals mostly use ctrl+shift+v, or shift+Insert from the
-	// primary selection, while the rest of the desktop uses ctrl+v.
+	// primary selection, while the rest of the desktop takes shift+Insert.
 	Apps map[string]PasteAppConfig `toml:"apps"`
 	// RestoreClipboard puts the previous clipboard contents back afterwards.
 	RestoreClipboard bool `toml:"restore_clipboard"`

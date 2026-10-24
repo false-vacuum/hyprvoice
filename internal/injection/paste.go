@@ -51,7 +51,8 @@ type PasteConfig struct {
 	Default PasteApp
 	// Apps maps an app id to how that app pastes, because no single answer is
 	// right everywhere: terminals mostly use ctrl+shift+v, or shift+Insert
-	// from the primary selection, while the rest of the desktop uses ctrl+v.
+	// from the primary selection, while the rest of the desktop takes
+	// shift+Insert.
 	Apps map[string]PasteApp
 	// RestoreClipboard puts the previous clipboard contents back afterwards.
 	// It does nothing for an app pasting from the primary selection, which

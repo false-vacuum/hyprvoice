@@ -296,11 +296,11 @@ keywords = []
 
   # Only used when "paste" is in backends.
   [injection.paste]
-    key = "ctrl+v"             # Sent when the focused app is not listed below
+    key = "shift+Insert"       # Sent when the focused app is not listed below
     selection = "clipboard"    # "clipboard" or "primary"
     restore_clipboard = true   # Put the previous clipboard contents back afterwards
 
-    # Apps that do not paste with ctrl+v, keyed by the app id the compositor
+    # Apps that do not paste with shift+Insert, keyed by the app id the compositor
     # reports. Terminals moved paste to ctrl+shift+v because ctrl+c interrupts.
     # selection = "primary" uses the mouse-selection buffer, which clipboard
     # managers generally do not record, so the text leaves no history entry.
