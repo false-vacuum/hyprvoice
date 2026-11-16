@@ -134,6 +134,14 @@ func (r *recorder) captureLoop(ctx context.Context, frameCh chan<- AudioFrame, e
 	r.cmd = cmd
 	r.mu.Unlock()
 
+	// Kill pw-record if it is still running, then reap it. Without Wait the
+	// exited child stays a zombie in the daemon's process table. Runs before
+	// the cleanup above, so r.cancel is still set and Stop's wg.Wait covers it.
+	defer func() {
+		r.requestCancel()
+		_ = cmd.Wait()
+	}()
+
 	go func() {
 		scanner := bufio.NewScanner(stderr)
 		for scanner.Scan() {
